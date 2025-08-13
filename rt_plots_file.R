@@ -7,7 +7,7 @@
 ## Required R packages
 require(deSolve)  # version 1.40
 require(MASS)     # version 7.3-60.2
-require(survival) # version 3.6.4
+require(survival) # version 3.6
 require(dplyr)    # version 1.1.4
 require(tidyr)    # version 1.3.1
 require(ggplot2)  # version 3.5.1
@@ -85,7 +85,7 @@ fig6 <- list(Rt_out = d6,
 
 rt_plot(fig6, ymax = 3) + coord_cartesian(ylim = c(0, 3))
 
-## Fig 7: intervention with initial R0 = 4 and tE = tI = 1/4 -------------------
+## Fig 7: intervention with initial R0 = 4 and tE = tI = 4 ---------------------
 c7 <- read.csv("2M_int4_44_Cori.csv")
 d7 <- read.csv("2M_int4_44_DSA.csv")
 pars7 <- list(delta = 1/4, gamma = 1/4, width = 8, end = 100)
@@ -96,7 +96,7 @@ fig7 <- list(Rt_out = d7,
 
 rt_plot(fig7, ymax = 5) + coord_cartesian(ylim = c(0, 5))
 
-## Fig 8: intervention with initial R0 = 4 and tE = 1 and tI = 1/7, window = 4 --
+## Fig 8: intervention with initial R0 = 4 and tE = tI = 4, window = 4 ---------
 c8 <- read.csv("2M_int4_44_w4_Cori.csv")
 d8 <- read.csv("2M_int4_44_w4_DSA.csv")
 pars8 <- list(delta = 1/4, gamma = 1/4, width = 4, end = 100)
