@@ -147,6 +147,24 @@ tryCatch({
   message("oops!:", conditionMessage(e))
 })
 
+# 10/30/25 edit: try simulation for latent period = 1 and infectious period = 7
+# using both the correct and the underestimate of the variance according to 
+# Gostic. below is the underestimated version
+
+# scenario 3: delta = 1, gamma = 1/7, R0 = 2, variance est is wrong
+tryCatch({
+  cat("\nrunning scenario: int = N, delta = 1, gamma = 1/7, R0 = 2\n")
+  system.time(rt_2_17_gost <- rt_est_gostic(n = pop, begin = 0, end = 150, 
+                                            width = 8, step = 1, R0 = 2, 
+                                            delta = 1, gamma = 1/7, 
+                                            I_init = 3e-5 * pop))
+  
+  write.csv(rt_2_17_gost$Rt_out, paste0(name, "_r02_17_DSA_g.csv"))
+  write.csv(rt_2_17_gost$Cori_out, paste0(name, "_r02_17_Cori_g.csv"))
+}, error = function(e) {
+  message("oops!:", conditionMessage(e))
+})
+
 
 
 
