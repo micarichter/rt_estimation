@@ -17,7 +17,7 @@ source("simulation.R")
 
 n_samp <- 2000
 
-eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/eon_dsa_deg100_r02.csv")
+eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/eon_dsa_deg10_r04a.csv")
 
 # fix initial cases: etimes = 0
 eon_dsa$etime[eon_dsa$itime == 0] <- 0
@@ -39,8 +39,8 @@ names(eon_dsa) <- c("X", "id", "eTime", "iTime", "rTime", "estat", "istat", "rst
 
 # take a sample of 2000 (or read in previously selected sample)
 eon_sample <- eon_dsa[sample(nrow(eon_dsa), n_samp), ]
-#write.csv(eon_sample, "sampdeg100_r04.csv")
-#eon_sample <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/sampdeg10_r04.csv")
+#write.csv(eon_sample, "sampdeg10_r04a.csv")
+#eon_sample <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/sampdeg10_r04a.csv")
 
 # function to estimate Rt with network data
 eon_est <- function(dat, begin, end, width, step, obs_end) {
@@ -65,7 +65,6 @@ eon_est <- function(dat, begin, end, width, step, obs_end) {
       print(tstart + width)
       #print(inits)
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
-      #dat <- HSsubset(dat, tstart = tstart, tstop = tstart + width)
       #DSAest <- DSAmle(dat, init = inits, method = "L-BFGS-B")
       DSAest <- DSAmle(dat, method = "L-BFGS-B")
       pvec <- as.numeric(exp(DSAest$point$point))
@@ -121,7 +120,7 @@ system.time(res4 <- eon_est(dat = eon_sample, begin = 0, end = 50, width = 4,
 # grid()
 
 # true Rt data, (R0 = 4)
-true_sim <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/seir_deg10_r04.csv")
+true_sim <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/seir_deg10_r04a.csv")
 #write.csv(true_sim, "seir_dat_r02.csv")
 #plot(true_sim$time, true_sim$true_rt, type = "l", col = "red")
 #res$true_rt <- true_sim$true_rt
@@ -132,12 +131,12 @@ true_sim2 <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOh
 #plot(true_sim2$time, true_sim2$true_rt, type = "l")
 
 # Cori estimates
-cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_pairs_deg100_r04.csv")
+cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_pairs_deg10_r04a.csv")
 #pairs_sample <- cori_gt[sample(nrow(cori_gt), 50), ]
 #pairs_sample <- cori_gt[c(1:1000), ]
 
 # find point at which S = 0.9
-c_cutoff <- min(true_sim2$time[true_sim2$S/500000 == 0.9])
+c_cutoff <- min(true_sim$time[true_sim$S/500000 == 0.9])
 pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
 pairs_sample <- pairs_sample[sample(nrow(pairs_sample), 2000), ]
 
@@ -147,7 +146,7 @@ gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
                     "SR" = ceiling(pairs_sample$etime_infectee))
 gt_df[] <- lapply(gt_df, as.integer)
 
-cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/incidence_deg100_r04.csv")
+cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/incidence_deg10_r04a.csv")
 names(cori_incidence) <- c("time", "incidence")
 
 mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
@@ -164,11 +163,11 @@ system.time(cori_res <- estimate_R(incid = cori_incidence$incidence, method = "s
                        si_data = gt_df, 
                        config = config))
 #write.csv(cori_res$R, "1573c_r02_deg50.csv")
-write.csv(cori_res$R, "2k_r04_deg100_cori.csv")
+#write.csv(cori_res$R, "2k_r04_deg10a_cori.csv")
 #write.csv(cori_res$R, "3k_r04_cori.csv")
 #plot(cori_res)
 
-#cori_res <- read.csv("2k_r04_deg10_cori.csv")
+#cori_res <- read.csv("2k_r04_deg10a_cori.csv")
 
 # plotting function
 eon_plots <- function(DSA, Cori, truth, R0, width, pop, ymax) {
@@ -225,20 +224,22 @@ eon_plots(DSA = res4, Cori = cori_res, truth = true_sim, width = 4, R0 = 4,
           pop = n_samp, ymax = 5)
 
 # smoothed estimate using many windows
-adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
+adaptive_smooth1 <- function(windows_vec = c(4, 6)) {
   
   # estimate Rt at different window sizes
   window_list <- lapply(windows_vec, function(x) {
     eon_est(dat = eon_sample, begin = 0, end = end, width = x, 
             step = 1, obs_end = TRUE) %>%
-    dplyr::select(time, estimate, rt_var) %>%
+    dplyr::select(time, estimate, beta, gamma, rt_var) %>%
     dplyr::rename(!!paste0("rt", x) := estimate,
+                  !!paste0("beta", x) := beta,
+                  !!paste0("gamma", x) := gamma,
                   !!paste0("var", x) := rt_var)
   })
   
   # housekeeping
-  rt_all <- Reduce(function(x,y) 
-    inner_join(x,y, by = "time", na_matches = "never"), window_list)
+  rt_all <- Reduce(function(x, y) 
+    inner_join(x, y, by = "time", na_matches = "never"), window_list)
   stable <- apply(rt_all[ , grepl("rt|var", names(rt_all))], 1,
                   function(row) all(is.finite(row)))
   idx <- which(stable)
@@ -246,9 +247,11 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   
   # inverse variance weights
   rt_cols <- grep("^rt", names(rt_trim), value = TRUE)
+  beta_cols <- grep("^beta", names(rt_trim), value = TRUE)
+  gamma_cols <- grep("^gamma", names(rt_trim), value = TRUE)
   var_cols <- grep("^var", names(rt_trim), value = TRUE)
-  rt_mat <- as.matrix(rt_trim[, rt_cols])
-  var_mat <- as.matrix(rt_trim[, var_cols])
+  rt_mat <- as.matrix(rt_trim[ , rt_cols])
+  var_mat <- as.matrix(rt_trim[ , var_cols])
   
   precision <- rowSums(1/var_mat)
   rt_comb <- rowSums(rt_mat/var_mat) / precision
@@ -269,21 +272,23 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
     
     weights <- 1/vars
     weights <- weights/sum(weights)
-    #rt_sim <- samples %*% weights
     rt_sim <- apply(samples, 1, function(x)  sample(x, size = 1, prob = weights))
     
     lower[i] <- quantile(rt_sim, 0.025)
     upper[i] <- quantile(rt_sim, 0.975)
   }
-  data.frame(
+  
+  res_df <- 
+    data.frame(
     time = rt_trim$time,
     estimate = rt_comb,
     lower = lower,
     upper = upper
   )
+  return(list(rt_trim, res_df))
 }
 
-windows_deg10_4 <- adaptive_smooth1()
+windows_deg10_4a <- adaptive_smooth1()
 write.csv(windows_deg100_2, "smooth_r04_deg100.csv")  
 
 
@@ -291,8 +296,8 @@ write.csv(windows_deg100_2, "smooth_r04_deg100.csv")
 adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
   
   dsa_dat <- DSAsmooth
-  cori_dat <- Cori
-  #cori_dat <- Cori$R
+  #cori_dat <- Cori
+  cori_dat <- Cori$R
   true_dat <- truth
   
   annot <- data.frame(
@@ -339,5 +344,5 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
     coord_cartesian(ylim = c(0, ymax)) 
 }
 
-adaptive_smooth_plot(DSA = windows_deg10_4, Cori = cori_res, truth = true_sim, R0 = 4,
+adaptive_smooth_plot(DSA = windows_deg10_4a[[2]], Cori = cori_res, truth = true_sim, R0 = 4,
           pop = n_samp, ymax = 5)
