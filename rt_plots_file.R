@@ -117,4 +117,3 @@ fig9 <- list(Rt_out = d9,
              parameters = pars9)
 
 rt_plot(fig9, ymax = 3) + coord_cartesian(ylim = c(0, 3))
-
