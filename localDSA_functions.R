@@ -347,9 +347,11 @@ nloglikDSA <- function(pvec, data, tstep) {
     loglikE <- loglikE + lnrhoE * sum((Erisk == 0) & (Irisk == 1))
     infected <- (Irisk == 1) & (Istat == 1)
     loglikI <- lndelta * sum(infected) - exp(lndelta) * sum(Itime - Etime) 
+    #loglikI <- lndelta * (sum(infected) + 1/2) - exp(lndelta) * sum(Itime - Etime) 
     loglikI <- loglikI + lnrhoI * sum((Irisk == 0) & (Rrisk == 1))
     recovered <- (Rrisk == 1) & (Rstat == 1)
     loglikR <- lngamma * sum(recovered) - exp(lngamma) * sum(Rtime - Itime)
+    #loglikR <- lngamma * (sum(recovered) + 1/2) - exp(lngamma) * sum(Rtime - Itime)
     loglikR <- loglikR + lnrhoR * sum((Rrisk == 0) & (Rstat == 1))
     
     # return negative log likelihood
@@ -364,7 +366,7 @@ DSAmle <- function(data, init, tstep, level = 0.95, ...) {
   }
   names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", "lnxrhoR")
   mle <- optim(
-    init, nloglikDSA, data = data, tstep = tstep, hessian = TRUE,  ...)
+    init, nloglikDSA, data = data, tstep = tstep, hessian = TRUE, ...)
   
   # point estimate, covariance matrix, and log likelihood value
   point <- data.frame(point = mle$par)
@@ -503,7 +505,8 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   upperR <- apply(R, 2, upperq)
   lowerRt <- apply(Rt, 2, lowerq)
   upperRt <- apply(Rt, 2, upperq)
-  Rt <- apply(Rt, 2, median)
+  Rt_med <- apply(Rt, 2, median)
+  Rt_var <- apply(Rt, 2, var)
   
   # return confidence limits
   bounds <- data.frame(
@@ -513,12 +516,14 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     lowerI = lowerI, upperI = upperI,
     lowerR = lowerR, upperR = upperR,
     lowerRt = lowerRt, upperRt = upperRt,
-    Rt = Rt,
+    Rt = Rt_med, Rt_var = Rt_var,
     row.names = NULL)
   attr(bounds, "level") <- level
   
-  # return bounds
-  bounds
+  # return bounds and samples
+  list(
+    bounds = bounds
+  )
 }
 
 
@@ -694,6 +699,7 @@ EPIdat <- function(dat, tstart, tstop) {
   
   # human sensors data
   hsdata <- data.frame(
+    id = dat$id,
     Etime = Etime, Erisk = Erisk, Estat = Estat,
     Itime = Itime, Irisk = Irisk, Istat = Istat,
     Rtime = Rtime, Rrisk = Rrisk, Rstat = Rstat
@@ -701,6 +707,26 @@ EPIdat <- function(dat, tstart, tstop) {
   attr(hsdata, "tstart") <- tstart
   attr(hsdata, "tstop") <- tstop
   hsdata
+}
+
+# function to censor dropout cases
+DSA_drop <- function(dat, droptime) {
+ 
+      # E compartment
+      Erisk <- !dat$Estat
+      Estat <- dat$Estat & (dat$Etime <= droptime)
+      Etime <- ifelse(Estat, dat$Etime, droptime)
+      
+      # I compartment
+      Irisk <- Estat & !dat$Istat
+      Istat <- dat$Istat & (dat$Itime <= droptime)
+      Itime <- ifelse(dat$Istat, dat$Itime, droptime)
+      
+      
+      Rstat <- dat$Rstat & (dat$Rtime <= droptime)
+      Rtime <- ifelse(dat$Rstat, dat$Rtime, droptime)
+      Rrisk <- Istat & !dat$Rstat
+
 }
 
 # fit data and estimate parameters over a sliding window
@@ -910,7 +936,8 @@ EPI_window <- function(dat) {
   for (i in 1:length(tstarts)) {
     try({
       tstart <- tstarts[i]
-      hsdat_i <- EPIdat(dat[sample(nrow(dat), 5000), ], tstart = tstart, tstop = tstart + width)
+      dat_i <- dat[sample(nrow(dat), 5000), ]
+      hsdat_i <- EPIdat(dat_i, tstart = tstart, tstop = tstart + width)
       DSAest_i <- DSAmle(hsdat_i, method = "L-BFGS-B")
       est[i, 1:6] <- DSAest_i$point[, 1]
       est[i, 7] <- DSAest_i$lnR0[1]
