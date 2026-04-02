@@ -183,7 +183,7 @@ get_WT <- function(df.in,
     setNames(c('time', paste0(outcol_name, '.mean'), paste0(outcol_name, '.025'), paste0(outcol_name, '.975')))
 }
 
-
+#### 2025 Oct 31: changed variance estimate in get_cori
 
 # df.in = rtdf
 # icol_name = 'incidence'
@@ -197,7 +197,8 @@ get_cori <- function(df.in,
                      out_name = 'Cori',
                      window = 1, 
                      GI_mean=parlist$true_mean_GI, 
-                     GI_var=2*(parlist$true_mean_GI/2)^2,
+                     #GI_var=2*(parlist$true_mean_GI/2)^2,
+                     GI_var = parlist$t_E^2 + parlist$t_I^2,
                      wend = TRUE){
   
   max.obs.time <- df.in %>% filter(!is.na(!!sym(icol_name))) %>% pull(time) %>% tail(1)
