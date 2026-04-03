@@ -15,9 +15,9 @@ source("rt_est_functions.R")
 source("util2.R")
 source("simulation.R")
 
-n_samp <- 2000
+n_samp <- 1000
 
-eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/eon_dsa_deg10_r04a.csv")
+eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/eon_dsa_deg10_r02.csv")
 
 # fix initial cases: etimes = 0
 eon_dsa$etime[eon_dsa$itime == 0] <- 0
@@ -39,7 +39,7 @@ names(eon_dsa) <- c("X", "id", "eTime", "iTime", "rTime", "estat", "istat", "rst
 
 # take a sample of 2000 (or read in previously selected sample)
 eon_sample <- eon_dsa[sample(nrow(eon_dsa), n_samp), ]
-#write.csv(eon_sample, "sampdeg10_r04a.csv")
+#write.csv(eon_sample, "sampdeg10_r04_700.csv")
 #eon_sample <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/sampdeg10_r04a.csv")
 
 # function to estimate Rt with network data
@@ -120,7 +120,7 @@ system.time(res4 <- eon_est(dat = eon_sample, begin = 0, end = 50, width = 4,
 # grid()
 
 # true Rt data, (R0 = 4)
-true_sim <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/seir_deg10_r04a.csv")
+true_sim <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/seir_deg10_r04.csv")
 #write.csv(true_sim, "seir_dat_r02.csv")
 #plot(true_sim$time, true_sim$true_rt, type = "l", col = "red")
 #res$true_rt <- true_sim$true_rt
@@ -131,7 +131,7 @@ true_sim2 <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOh
 #plot(true_sim2$time, true_sim2$true_rt, type = "l")
 
 # Cori estimates
-cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_pairs_deg10_r04a.csv")
+cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_pairs_deg10_r04.csv")
 #pairs_sample <- cori_gt[sample(nrow(cori_gt), 50), ]
 #pairs_sample <- cori_gt[c(1:1000), ]
 
@@ -146,7 +146,7 @@ gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
                     "SR" = ceiling(pairs_sample$etime_infectee))
 gt_df[] <- lapply(gt_df, as.integer)
 
-cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/incidence_deg10_r04a.csv")
+cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/incidence_deg10_r04.csv")
 names(cori_incidence) <- c("time", "incidence")
 
 mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
@@ -288,8 +288,8 @@ adaptive_smooth1 <- function(windows_vec = c(4, 6)) {
   return(list(rt_trim, res_df))
 }
 
-windows_deg10_4a <- adaptive_smooth1()
-write.csv(windows_deg100_2, "smooth_r04_deg100.csv")  
+windows_deg10_2 <- adaptive_smooth1()
+#write.csv(windows_deg10_4, "smooth_r04_deg10.csv")  
 
 
 # adaptive window plot
@@ -341,8 +341,8 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
       )
     ) +
     geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
-    coord_cartesian(ylim = c(0, ymax)) 
+    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 100)) 
 }
 
-adaptive_smooth_plot(DSA = windows_deg10_4a[[2]], Cori = cori_res, truth = true_sim, R0 = 4,
-          pop = n_samp, ymax = 5)
+adaptive_smooth_plot(DSA = windows_deg10_2[[2]], Cori = cori_res, truth = true_sim2, R0 = 2,
+          pop = n_samp, ymax = 3)
