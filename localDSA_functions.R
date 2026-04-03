@@ -346,12 +346,12 @@ nloglikDSA <- function(pvec, data, tstep) {
     loglikE <- (lnbeta * sum(exposed) + sum(logIfun(Etime[exposed])))
     loglikE <- loglikE + lnrhoE * sum((Erisk == 0) & (Irisk == 1))
     infected <- (Irisk == 1) & (Istat == 1)
-    loglikI <- lndelta * sum(infected) - exp(lndelta) * sum(Itime - Etime) 
-    #loglikI <- lndelta * (sum(infected) + 1/2) - exp(lndelta) * sum(Itime - Etime) 
+    #loglikI <- lndelta * sum(infected) - exp(lndelta) * sum(Itime - Etime) 
+    loglikI <- lndelta * (sum(infected) + 1/2) - exp(lndelta) * sum(Itime - Etime) 
     loglikI <- loglikI + lnrhoI * sum((Irisk == 0) & (Rrisk == 1))
     recovered <- (Rrisk == 1) & (Rstat == 1)
-    loglikR <- lngamma * sum(recovered) - exp(lngamma) * sum(Rtime - Itime)
-    #loglikR <- lngamma * (sum(recovered) + 1/2) - exp(lngamma) * sum(Rtime - Itime)
+    #loglikR <- lngamma * sum(recovered) - exp(lngamma) * sum(Rtime - Itime)
+    loglikR <- lngamma * (sum(recovered) + 1/2) - exp(lngamma) * sum(Rtime - Itime)
     loglikR <- loglikR + lnrhoR * sum((Rrisk == 0) & (Rstat == 1))
     
     # return negative log likelihood
