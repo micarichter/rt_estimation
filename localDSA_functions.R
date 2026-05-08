@@ -300,18 +300,46 @@ HSplot <- function(
   grid()
 }
 
+# Estimate empirical rhos from network data
+emp_rho <- function(data) {
+  pop <- sum(data$S, data$E, data$I, data$R)
+  tmp <- data %>% mutate(S = S/pop, E = E/pop, I = I/pop, R = R/pop)
+  
+  rhoE <- approxfun(tmp$time, tmp$E)
+  rhoI <- approxfun(tmp$time, tmp$I)
+  rhoR <- approxfun(tmp$time, tmp$R)
+  
+  list(rhoE, rhoI, rhoR)
+} 
+
+
+# rhos to xrhos transformation
+rho_to_simplex <- function(rhoE, rhoI, rhoR) {
+  xrhoE <- rhoE / (1 - (rhoE + rhoI + rhoR))
+  xrhoI <- rhoI / (1 - (rhoE + rhoI + rhoR))
+  xrhoR <- rhoR / (1 - (rhoE + rhoI + rhoR))
+  
+  data.frame(xrhoE = xrhoE, xrhoI = xrhoI, xrhoR = xrhoR)
+} 
+
 
 ## maximum likelihood estimation of SEIR parameters ----------------------------
-# DSA log likelihood
-nloglikDSA <- function(pvec, data, tstep) {
+# DSA log likelihood, called from DSAmle()
+nloglikDSA <- function(pvec, data, tstep, fvec) {
   # SEIR parameters
   pvec <- as.numeric(pvec)
   lnbeta <- pvec[1]
   lndelta <- pvec[2]
   lngamma <- pvec[3]
-  xrhoE <- exp(pvec[4])
-  xrhoI <- exp(pvec[5])
-  xrhoR <- exp(pvec[6])
+  if(is.null(fvec)) {
+    xrhoE <- exp(pvec[4])
+    xrhoI <- exp(pvec[5])
+    xrhoR <- exp(pvec[6])
+  } else {
+    xrhoE <- as.numeric(exp(fvec[1]))
+    xrhoI <- as.numeric(exp(fvec[2]))
+    xrhoR <- as.numeric(exp(fvec[3]))
+  }
   
   # human sensors start and stop times
   tstart <- attr(data, "tstart")
@@ -323,16 +351,13 @@ nloglikDSA <- function(pvec, data, tstep) {
   rhoE <- xrhoE / (1 + xrhoE + xrhoI + xrhoR)
   rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
   rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
+  
   state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-  params <- c(beta = exp(lnbeta), delta = exp(lndelta), gamma = exp(lngamma), 
-              rhoE, rhoI, rhoR)
+  params <- c(beta = exp(lnbeta), delta = exp(lndelta), gamma = exp(lngamma))
   odesolve <- ode(y = state, times = times, func = KMode, parms = params)
   logSfun <- approxfun(
     odesolve[, "time"], log(odesolve[, "S"]),
     yleft = log(1 - rhoE - rhoI - rhoR), yright = log(odesolve[nrow(odesolve), "S"]))
-  # logEfun <- approxfun(
-  #   odesolve[, "time"], log(odesolve[, "E"]), rule = 2,
-  #   yleft = log(rhoE))
   logIfun <- approxfun(
     odesolve[, "time"], log(odesolve[, "I"]), 
     yleft = log(rhoI), yright = log(odesolve[nrow(odesolve), "I"]))
@@ -359,19 +384,58 @@ nloglikDSA <- function(pvec, data, tstep) {
   })
 }
 
+# Convert EIRsurv to EIRprev
+EIRsurv_to_rho <- function(EIRsurv) {
+  with(EIRsurv, {
+    list(rhoE = rhoIsurv - rhoEsurv,
+         rhoI = rhoRsurv - rhoIsurv,
+         rhoR = 1 - rhoRsurv)
+  })
+} 
+
+# Convert EIRsurv_se to EIRprev_se
+EIRsurv_se_to_rho <- function(EIRsurv) {
+  with(EIRsurv, {
+    list(rhoE_se = exp(-cumhazE) * rhoEsurv_se,
+         rhoI_se = exp(-cumhazI) * rhoIsurv_se,
+         rhoR_se = exp(-cumhazR) * rhoRsurv_se)
+  })
+}
+
+
 # DSA maximum likelihood estimates
-DSAmle <- function(data, init, tstep, level = 0.95, ...) {
-  if (missing(init)) {
-    init <- c(0, 0, 0, 0, 0, 0)
+DSAmle <- function(data, init, tstep, empEIRsurv = NULL, level = 0.95, ...) {
+  
+  if (is.null(empEIRsurv) || missing(empEIRsurv)) {
+    if (missing(init)) {
+      init <- c(0, 0, 0, 0, 0, 0)
+    }
+    names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", 
+                     "lnxrhoR")
+    R0coefs <- c(1, 0, -1, 0, 0, 0)
+    empEIR <- NULL
+    fvec <- NULL
+  } else {
+    if (missing(init)) {
+      init <- c(0, 0, 0)
+      R0coefs <- c(1, 0, -1)
+    }
+    names(init) <- c("lnbeta", "lndelta", "lngamma")
+    empEIR <- EIRsurv_to_rho(empEIRsurv)
+    rhoE <- empEIR$rhoE
+    rhoI <- empEIR$rhoI
+    rhoR <- empEIR$rhoR
+    xrhos <- rho_to_simplex(rhoE = rhoE, rhoI = rhoI, rhoR = rhoR)
+    fvec <- log(xrhos)
   }
-  names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", "lnxrhoR")
   mle <- optim(
-    init, nloglikDSA, data = data, tstep = tstep, hessian = TRUE, ...)
+    init, fn = nloglikDSA, data = data, tstep = tstep, fvec = fvec, 
+    hessian = TRUE,...)
   
   # point estimate, covariance matrix, and log likelihood value
   point <- data.frame(point = mle$par)
   cov <- solve(mle$hessian)
-  ll <- -mle$value
+  loglik <- -mle$value
   
   # interval estimates
   alpha <- 1 - level
@@ -384,7 +448,6 @@ DSAmle <- function(data, init, tstep, level = 0.95, ...) {
   names(interval) <- c(lower_name, upper_name)
   
   # R0 point and interval estimates
-  R0coefs <- c(1, 0, -1, 0, 0, 0)
   lnR0 <- R0coefs %*% mle$par
   lnR0_stderr <- sqrt(R0coefs %*% cov %*% R0coefs)
   lnR0_lower <- lnR0 - qnorm(1 - alpha / 2) * lnR0_stderr
@@ -394,8 +457,8 @@ DSAmle <- function(data, init, tstep, level = 0.95, ...) {
   
   # return list of results
   list(
-    point = point, interval = interval, lnR0 = lnR0,
-    stderr = stderr, cov = cov, ll = ll)
+    point = point, interval = interval, lnR0 = lnR0, stderr = stderr, cov = cov, 
+    loglik = loglik, empEIRsurv = empEIRsurv, empEIR = empEIR)
 }
 
 DSAsummary <- function(DSAest, invln = FALSE) {
@@ -411,19 +474,21 @@ DSAsummary <- function(DSAest, invln = FALSE) {
 ## maximum likelihood model fit and predictions -------------------------------
 ## model fit and predictions --------------------------------------------------
 DSApredict <- function(point, times, samples, level = 0.95) {
-  # point estimates are lnbeta, lndelta, lngamma, lnxrhoE, lnxrhoI, and lnxrhoR
+  # point estimates are lnbeta, lndelta, lngamma
   # times is a vector of times at which the SEIR curves should be plotted
   # samples is a set of multivariate normal or MC posterior samples
   # samples and level are ignored unless ci = TRUE
   
   # run ODE at point estimate
-  xrhos <- exp(point[4:6])
-  rho_total <- 1 + sum(xrhos)
-  rhoE <- xrhos[1] / rho_total
-  rhoI <- xrhos[2] / rho_total
-  rhoR <- xrhos[3] / rho_total
-  params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]),
-              rhoE = rhoE, rhoI = rhoI, rhoR = rhoR)
+  # xrhos <- exp(point[4:6])
+  # rho_total <- 1 + sum(xrhos)
+  # rhoE <- xrhos[1] / rho_total
+  # rhoI <- xrhos[2] / rho_total
+  # rhoR <- xrhos[3] / rho_total
+  rhoE <- rhoE_fixed(tstart)
+  rhoI <- rhoI_fixed(tstart)
+  rhoR <- rhoR_fixed(tstart)
+  params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
   
   state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
   KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
@@ -446,11 +511,48 @@ DSApredict <- function(point, times, samples, level = 0.95) {
   epidemic
 }
 
-DSApred_mlesamp <- function(mle, nsamp = 1000) {
-  # sample from MLE multivariate normal approximation
-  mu <- mle$point$point
-  Sigma <- mle$cov
-  mvrnorm(nsamp, mu, Sigma, empirical = TRUE)
+DSApred_mlesamp <- function(mle, nsamp = 1000, empEIRsurv = NULL) {
+  
+  if (is.null(empEIRsurv)) {
+    # sample from MLE multivariate normal approximation
+    mu <- mle$point$point
+    Sigma <- mle$cov
+    return(mvrnorm(nsamp, mu, Sigma, empirical = TRUE))
+  } else {
+    mu <- mle$point$point
+    Sigma <- mle$cov
+    pars1 <- mvrnorm(nsamp, mu, Sigma, empirical = TRUE)
+    # get rhos estimates
+    empEIR <- EIRsurv_to_rho(empEIRsurv)
+    rhoE <- empEIR$rhoE
+    rhoI <- empEIR$rhoI
+    rhoR <- empEIR$rhoR
+    rhos_est <- c(rhoE, rhoI, rhoR)
+    # xrhos <- rho_to_simplex(rhos_est[1], rhos_est[2], rhos_est[3])
+    # lxrhos <- lapply(xrhos, log)
+    # get rhos ses
+    empEIR_se <- EIRsurv_se_to_rho(empEIRsurv)
+    rhoE_se <- empEIR_se$rhoE_se
+    rhoI_se <- empEIR_se$rhoI_se
+    rhoR_se <- empEIR_se$rhoR_se
+    # xrhos_se <- rho_to_simplex(rhoE_se, rhoI_se, rhoR_se)
+    # lxrhos_se <- lapply(xrhos_se, log)
+    #Sigma2 <- diag(c(lxrhos_se[1], lxrhos_se[2], lxrhos_se[3]), 3, 3)
+    Sigma2 <- diag(c(rhoE_se, rhoI_se, rhoR_se))
+    #pars2 <- mvrnorm(nsamp, lxrhos, Sigma2)
+    pars2 <- mvrnorm(nsamp, rhos_est, Sigma2)
+    
+    # convert samples to lnxrhos
+    #xrhos_samples <- apply(pars2, 2, rho_to_simplex)
+    xrhos_samples <- t(mapply(rho_to_simplex, pars2[, 1], pars2[, 2], pars2[, 3]))
+    xrhos_samples <- as.data.frame(xrhos_samples)
+    lxrhos_samples <- data.frame(lxrhoE = log(as.numeric(xrhos_samples$xrhoE)),
+                                 lxrhoI = log(as.numeric(xrhos_samples$xrhoI)),
+                                 lxrhoR = log(as.numeric(xrhos_samples$xrhoR)))
+    
+    # append rhos samples to beta, delta, gamma samples
+    return(cbind(pars1, lxrhos_samples))
+  }
 }
 
 DSApred_ci <- function(samples, times, level = 0.95) {
@@ -465,6 +567,8 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   colnames(I) <- times
   R <- matrix(nrow = nsamp, ncol = length(times))
   colnames(R) <- times
+  logRt <- matrix(nrow = nsamp, ncol = length(times))
+  colnames(logRt) <- times
   Rt <- matrix(nrow = nsamp, ncol = length(times))
   colnames(Rt) <- times
   
@@ -472,8 +576,10 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     parameters <- exp(samples[i, ])
     names(parameters) <- c("beta", "delta", "gamma", "xrhoE", "xrhoI", "xrhoR")
     beta <- parameters["beta"]
+    lbeta <- log(beta)
     delta <- parameters["delta"]
     gamma <- parameters["gamma"]
+    lgamma <- log(gamma)
     xrhoE <- as.numeric(parameters["xrhoE"])
     xrhoI <- as.numeric(parameters["xrhoI"])
     xrhoR <- as.numeric(parameters["xrhoR"])
@@ -484,10 +590,13 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     KMsolve <- ode(
       y = state, times = times, func = KMode, parms = parameters)
     S[i, ] <- KMsolve[, "S"]
+    logS <- log(S[i,])
     E[i, ] <- KMsolve[, "E"]
     I[i, ] <- KMsolve[, "I"]
     R[i, ] <- KMsolve[, "R"]
-    Rt[i, ] <- as.matrix(S[i, ] * beta / gamma)
+    logRt[i, ] <- as.matrix(lbeta - lgamma + logS)
+    Rt[i, ] <- exp(logRt[i, ])
+    #Rt[i, ] <- as.matrix(S[i, ] * beta / gamma)
   }
   
   # find lower and upper quantiles of S, I, and R
@@ -503,8 +612,12 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   upperI <- apply(I, 2, upperq)
   lowerR <- apply(R, 2, lowerq)
   upperR <- apply(R, 2, upperq)
-  lowerRt <- apply(Rt, 2, lowerq)
-  upperRt <- apply(Rt, 2, upperq)
+  lowerlRt <- apply(logRt, 2, lowerq)
+  upperlRt <- apply(logRt, 2, upperq)
+  lowerRt <- exp(lowerlRt)
+  upperRt <- exp(upperlRt)
+  #lowerRt <- apply(Rt, 2, lowerq)
+  #upperRt <- apply(Rt, 2, upperq)
   Rt_med <- apply(Rt, 2, median)
   Rt_var <- apply(Rt, 2, var)
   
