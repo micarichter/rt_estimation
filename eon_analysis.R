@@ -15,9 +15,9 @@ source("localDSA_functions.R")
 source("util2.R")
 source("simulation.R")
 
-n_sens <- 1500
+n_sens <- 750
 
-eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/configeon_dsa_deg100_r02.csv")
+eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/configeon_dsa_deg10_r04.csv")
 
 # fix initial cases: etimes = 0
 eon_dsa$etime[eon_dsa$itime == 0] <- 0
@@ -30,20 +30,21 @@ eon_dsa$rtime <- ifelse(eon_dsa$etime == Inf, Inf, eon_dsa$rtime)
 
 # add indicators
 start <- 0
-end <- 170
+begin <- 0
+end <- 75 
 eon_dsa$estat <- ifelse(eon_dsa$etime < end, 1, 0)
 eon_dsa$istat <- ifelse(eon_dsa$itime < end, 1, 0)
 eon_dsa$rtsat <- ifelse(eon_dsa$rtime < end, 1, 0)
 
 names(eon_dsa) <- c("X", "id", "eTime", "iTime", "rTime", "estat", "istat", "rstat")
 
-# take a sample of 2000 (or read in previously selected sample)
+# take a sample of 1000 (or read in previously selected sample)
 eon_sample <- eon_dsa[sample(nrow(eon_dsa), n_sens), ]
 #write.csv(eon_sample, "sampdeg10_r04_700.csv")
 #eon_sample <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/sampdeg10_r04a.csv")
 
 # function to estimate Rt with network data
-eon_est <- function(dat, begin, end, width, step, obs_end, empEIRsurv = NULL) {
+eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALSE) {
 
   full_dat <- EPIdat(dat, begin, end)
 
@@ -60,35 +61,35 @@ eon_est <- function(dat, begin, end, width, step, obs_end, empEIRsurv = NULL) {
 
   names(dat) <- c("X", "id", "Etime", "Itime", "Rtime", "Estat", "Istat", "Rstat")
   
-  if (!is.null(empEIRsurv)) {
-  
-  empsurv <- HSsurv(dat)
-  EIRsurv <- data.frame(rhoEsurv = summary(empsurv$Esurv, times = tstarts,
-                                           data.frame = TRUE)$surv,
-                        cumhazE = summary(empsurv$Esurv, times = tstarts,
-                                          data.frame = TRUE)$cumhaz,
-                        rhoEsurv_se = summary(empsurv$Esurv, times = tstarts,
-                                              data.frame = TRUE)$std.err,
-                        rhoIsurv = summary(empsurv$Isurv, times = tstarts,
+  if (use_empEIRsurv == TRUE) {
+    empsurv <- HSsurv(dat)
+    EIRsurv <- data.frame(Esurv = summary(empsurv$Esurv, times = tstarts,
                                           data.frame = TRUE)$surv,
-                        cumhazI = summary(empsurv$Isurv, times = tstarts,
-                                         data.frame = TRUE)$cumhaz,
-                        rhoIsurv_se = summary(empsurv$Isurv, times = tstarts,
-                                             data.frame = TRUE)$std.err,
-                        rhoRsurv = summary(empsurv$Rsurv, times = tstarts,
+                          Ecumhaz = summary(empsurv$Esurv, times = tstarts,
+                                            data.frame = TRUE)$cumhaz,
+                          Ecumhaz_se = summary(empsurv$Esurv, times = tstarts,
+                                               data.frame = TRUE)$std.err,
+                          Isurv = summary(empsurv$Isurv, times = tstarts,
                                           data.frame = TRUE)$surv,
-                        cumhazR = summary(empsurv$Rsurv, times = tstarts,
-                                         data.frame = TRUE)$cumhaz,
-                        rhoRsurv_se = summary(empsurv$Rsurv, times = tstarts,
-                                             data.frame = TRUE)$std.err)
+                          Icumhaz = summary(empsurv$Isurv, times = tstarts,
+                                            data.frame = TRUE)$cumhaz,
+                          Icumhaz_se = summary(empsurv$Isurv, times = tstarts,
+                                               data.frame = TRUE)$std.err,
+                          Rsurv = summary(empsurv$Rsurv, times = tstarts,
+                                          data.frame = TRUE)$surv,
+                          Rcumhaz = summary(empsurv$Rsurv, times = tstarts,
+                                            data.frame = TRUE)$cumhaz,
+                          Rcumhaz_se = summary(empsurv$Rsurv, times = tstarts,
+                                              data.frame = TRUE)$std.err)
   }
   for (i in 1:length(tstarts)) {
     try({
       tstart <- tstarts[i]
       print(tstart + width)
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
-      if (is.null(empEIRsurv)) {
-        DSAest <- DSAmle(dat, empEIRsurv = NULL, method = "L-BFGS-B")
+      if (use_empEIRsurv == FALSE) {
+        # add init
+        DSAest <- DSAmle(dat, empEIRsurv = NULL, method = "SANN")
         pvec <- as.numeric(exp(DSAest$point$point))
         beta <- pvec[1]
         lbeta <- as.numeric(DSAest$point$point)[1]
@@ -103,14 +104,14 @@ eon_est <- function(dat, begin, end, width, step, obs_end, empEIRsurv = NULL) {
         rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
       } else {
         empEIRsurv <- EIRsurv[i, ]
-        DSAest <- DSAmle(dat, empEIRsurv = empEIRsurv, method = "L-BFGS-B")
+        DSAest <- DSAmle(dat, empEIRsurv = empEIRsurv, method = "SANN")
         pvec <- as.numeric(exp(DSAest$point$point))
         beta <- pvec[1]
         lbeta <- as.numeric(DSAest$point$point)[1]
         delta <- pvec[2]
         gamma <- pvec[3]
         lgamma <- as.numeric(DSAest$point$point)[3]
-        # inits <- c(log(beta), log(delta), log(gamma), log(rhoE), log(rhoI), log(rhoR))
+        #inits <- c(log(beta), log(delta), log(gamma), log(rhoE), log(rhoI), log(rhoR))
         rhoE <- as.numeric(DSAest$empEIR$rhoE)
         rhoI <- as.numeric(DSAest$empEIR$rhoI)
         rhoR <- as.numeric(DSAest$empEIR$rhoR)
@@ -145,8 +146,8 @@ eon_est <- function(dat, begin, end, width, step, obs_end, empEIRsurv = NULL) {
 }
 
 
-system.time(res2 <- eon_est(dat = eon_sample, begin = 0, end = 120, width = 6, 
-                           step = 1, obs_end = TRUE, empEIRsurv = TRUE))
+system.time(res4 <- eon_est(dat = eon_sample, begin = 10, end = 30, width = 4, 
+                           step = 1, obs_end = TRUE, use_empEIRsurv = TRUE))
 plot(res4$time, res4$estimate, type = "l", ylim = c(0, 5))
 #write.csv(res4, "dsanet_r04_w4_10k.csv")
 
@@ -183,7 +184,7 @@ lines(true_sim$time, true_sim$true_rt, type = "l", col = "red")
 # true Rt data (R0 = 2)
 true_sim2 <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/config_deg100_r02.csv")
 #true_sim2 <- read.csv("seir_dat_r02.csv")
-plot(true_sim2$time, true_sim2$true_rt, type = "l", col = "red")
+lines(true_sim2$time, true_sim2$true_rt, col = "red")
 grid()
 # get "empirical" rho estimates from proportions of S, E, I, R at each time point
 true_sim2a <- true_sim2
@@ -196,14 +197,14 @@ approxR2 <- approxfun(true_sim2a$time, true_sim2a$R)
 
 
 # Cori estimates
-cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_config_pairs_deg100_r04.csv")
+cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_config_pairs_deg10_r04.csv")
 #pairs_sample <- cori_gt[sample(nrow(cori_gt), 50), ]
 #pairs_sample <- cori_gt[c(1:1000), ]
 
 # find point at which S = 0.9
 c_cutoff <- min(true_sim$time[true_sim$S/500000 == 0.9])
 pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
-pairs_sample <- pairs_sample[sample(nrow(pairs_sample), 700), ]
+pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
 
 gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
                     "ER" = ceiling(pairs_sample$etime_infector),
@@ -211,7 +212,7 @@ gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
                     "SR" = ceiling(pairs_sample$etime_infectee))
 gt_df[] <- lapply(gt_df, as.integer)
 
-cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/config_incidence_deg100_r04.csv")
+cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/config_incidence_deg10_r04.csv")
 names(cori_incidence) <- c("time", "incidence")
 
 mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
@@ -295,8 +296,8 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   
   # estimate Rt at different window sizes
   window_list <- lapply(windows_vec, function(x) {
-    eon_est(dat = eon_sample, begin = 0, end = end, width = x, 
-            step = 1, obs_end = TRUE) %>%
+    eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
+            step = 1, obs_end = TRUE, use_empEIRsurv = TRUE) %>%
     dplyr::select(time, estimate, beta, gamma, rt_var) %>%
     dplyr::rename(!!paste0("rt", x) := estimate,
                   !!paste0("beta", x) := beta,
@@ -338,6 +339,7 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
     lvars <- vars / mu^2
     Sigma <- diag(vars)
     lSigma <- diag(lvars)
+    #browser()
     
     #samples <- mvrnorm(4000, mu = mu, Sigma = Sigma)
     lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
@@ -358,10 +360,10 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
     lower = lower,
     upper = upper
   )
-  return(list(rt_trim, res_df))
+  return(list(rt_trim, rt_all, res_df))
 }
 
-windows_deg10_4 <- adaptive_smooth1()
+windows_deg10_4 <- adaptive_smooth1(c(2, 4, 6, 8))
 #write.csv(windows_deg10_4, "smooth_r04_deg10.csv")  
 
 
@@ -369,7 +371,7 @@ windows_deg10_4 <- adaptive_smooth1()
 adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
   
   dsa_dat <- DSAsmooth
-  #cori_dat <- Cori
+  cori_dat <- Cori
   cori_dat <- Cori$R
   true_dat <- truth
   
@@ -414,8 +416,17 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
       )
     ) +
     geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
-    coord_cartesian(ylim = c(0, ymax))
+    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 60))
 }
 
-adaptive_smooth_plot(DSA = windows_deg100_2[[2]], Cori = cori_res, truth = true_sim, R0 = 4,
+adaptive_smooth_plot(DSA = windows_deg10_4[[3]], Cori = cori_res, truth = true_sim, R0 = 4,
           pop = n_sens, ymax = 5)
+
+
+
+
+
+
+
+
+
