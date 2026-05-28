@@ -365,6 +365,7 @@ nloglikDSA <- function(pvec, data, tstep, fvec) {
   lnrhoI <- log(rhoI)
   lnrhoR <- log(rhoR)
   
+  # +1/2 is a small sample correction
   with(data, {
     loglikS <- sum(logSfun(Etime[Erisk == 1])) 
     exposed <- (Erisk == 1) & (Estat == 1)
@@ -387,20 +388,20 @@ nloglikDSA <- function(pvec, data, tstep, fvec) {
 # Convert EIRsurv to EIRprev
 EIRsurv_to_rho <- function(EIRsurv) {
   with(EIRsurv, {
-    list(rhoE = rhoIsurv - rhoEsurv,
-         rhoI = rhoRsurv - rhoIsurv,
-         rhoR = 1 - rhoRsurv)
+    list(rhoE = Isurv - Esurv,
+         rhoI = Rsurv - Isurv,
+         rhoR = 1 - Rsurv)
   })
 } 
 
-# Convert EIRsurv_se to EIRprev_se
-EIRsurv_se_to_rho <- function(EIRsurv) {
-  with(EIRsurv, {
-    list(rhoE_se = exp(-cumhazE) * rhoEsurv_se,
-         rhoI_se = exp(-cumhazI) * rhoIsurv_se,
-         rhoR_se = exp(-cumhazR) * rhoRsurv_se)
-  })
-}
+# # Convert EIRsurv_se to EIRprev_se
+# EIRsurv_se_to_rho <- function(EIRsurv) {
+#   with(EIRsurv, {
+#     list(rhoE_se = exp(-cumhazE) * rhoEsurv_se,
+#          rhoI_se = exp(-cumhazI) * rhoIsurv_se,
+#          rhoR_se = exp(-cumhazR) * rhoRsurv_se)
+#   })
+# }
 
 
 # DSA maximum likelihood estimates
@@ -522,34 +523,39 @@ DSApred_mlesamp <- function(mle, nsamp = 1000, empEIRsurv = NULL) {
     mu <- mle$point$point
     Sigma <- mle$cov
     pars1 <- mvrnorm(nsamp, mu, Sigma, empirical = TRUE)
-    # get rhos estimates
-    empEIR <- EIRsurv_to_rho(empEIRsurv)
-    rhoE <- empEIR$rhoE
-    rhoI <- empEIR$rhoI
-    rhoR <- empEIR$rhoR
-    rhos_est <- c(rhoE, rhoI, rhoR)
-    # xrhos <- rho_to_simplex(rhos_est[1], rhos_est[2], rhos_est[3])
-    # lxrhos <- lapply(xrhos, log)
-    # get rhos ses
-    empEIR_se <- EIRsurv_se_to_rho(empEIRsurv)
-    rhoE_se <- empEIR_se$rhoE_se
-    rhoI_se <- empEIR_se$rhoI_se
-    rhoR_se <- empEIR_se$rhoR_se
+    # sample log cumhaz
+    lEcumhaz <- log(empEIRsurv$Ecumhaz)
+    lIcumhaz <- log(empEIRsurv$Icumhaz)
+    lRcumhaz <- log(empEIRsurv$Rcumhaz)
+    lcumhaz <- c(lEcumhaz, lIcumhaz, lRcumhaz)
+    
+    # delta method for SEs of the log
+    lEcumhaz_se <- empEIRsurv$Ecumhaz_se / empEIRsurv$Ecumhaz
+    lIcumhaz_se <- empEIRsurv$Icumhaz_se / empEIRsurv$Icumhaz
+    lRcumhaz_se <- empEIRsurv$Rcumhaz_se / empEIRsurv$Rcumhaz
     # xrhos_se <- rho_to_simplex(rhoE_se, rhoI_se, rhoR_se)
     # lxrhos_se <- lapply(xrhos_se, log)
     #Sigma2 <- diag(c(lxrhos_se[1], lxrhos_se[2], lxrhos_se[3]), 3, 3)
-    Sigma2 <- diag(c(rhoE_se, rhoI_se, rhoR_se))
-    #pars2 <- mvrnorm(nsamp, lxrhos, Sigma2)
-    pars2 <- mvrnorm(nsamp, rhos_est, Sigma2)
+    
+    Sigma2 <- diag(c(lEcumhaz_se, lIcumhaz_se, lRcumhaz_se)^2)
+    pars2 <- exp(-exp(mvrnorm(nsamp, lcumhaz, Sigma2)))
+    pars3 <- apply(pars2, 2, function(x) x[order(x)])
+    #browser()
+    Esurv_samp <- pars3[, 1]
+    Isurv_samp <- pars3[, 2]
+    Rsurv_samp <- pars3[, 3]
+    
+    rhoE_samp <- Isurv_samp - Esurv_samp
+    rhoI_samp <- Rsurv_samp - Isurv_samp
+    rhoR_samp <- 1 - Rsurv_samp
     
     # convert samples to lnxrhos
-    #xrhos_samples <- apply(pars2, 2, rho_to_simplex)
-    xrhos_samples <- t(mapply(rho_to_simplex, pars2[, 1], pars2[, 2], pars2[, 3]))
+    xrhos_samples <- t(mapply(rho_to_simplex, rhoE_samp, rhoI_samp, rhoR_samp))
     xrhos_samples <- as.data.frame(xrhos_samples)
     lxrhos_samples <- data.frame(lxrhoE = log(as.numeric(xrhos_samples$xrhoE)),
                                  lxrhoI = log(as.numeric(xrhos_samples$xrhoI)),
                                  lxrhoR = log(as.numeric(xrhos_samples$xrhoR)))
-    
+    #browser()
     # append rhos samples to beta, delta, gamma samples
     return(cbind(pars1, lxrhos_samples))
   }
@@ -596,14 +602,15 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     R[i, ] <- KMsolve[, "R"]
     logRt[i, ] <- as.matrix(lbeta - lgamma + logS)
     Rt[i, ] <- exp(logRt[i, ])
+    
     #Rt[i, ] <- as.matrix(S[i, ] * beta / gamma)
   }
   
   # find lower and upper quantiles of S, I, and R
   alpha <- 1 - level
-  lowerq <- function(x) quantile(x, alpha / 2)
-  upperq <- function(x) quantile(x, 1 - alpha / 2)
-  median <- function(x) quantile(x, 0.5)
+  lowerq <- function(x) quantile(x, alpha / 2, na.rm = TRUE)
+  upperq <- function(x) quantile(x, 1 - alpha / 2, na.rm = TRUE)
+  median <- function(x) quantile(x, 0.5, na.rm = TRUE)
   lowerS <- apply(S, 2, lowerq)
   upperS <- apply(S, 2, upperq)
   lowerE <- apply(E, 2, lowerq)
@@ -620,7 +627,6 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   #upperRt <- apply(Rt, 2, upperq)
   Rt_med <- apply(Rt, 2, median)
   Rt_var <- apply(Rt, 2, var)
-  
   # return confidence limits
   bounds <- data.frame(
     time = times,
