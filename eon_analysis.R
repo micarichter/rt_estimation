@@ -1,6 +1,6 @@
 # Estimate Rt using data generated from Epidemics on Networks package in Python
 
-# required R packages
+# required R packages and functions
 require(deSolve)  # version 1.40
 require(MASS)     # version 7.3-60.2
 require(survival) # version 3.6.4
@@ -11,39 +11,10 @@ require(data.table) # version 1.16.0
 require(EpiEstim) # version 2.2.4
 
 source("localDSA_functions.R")
-#source("rt_est_functions.R")
 source("util2.R")
 source("simulation.R")
 
-n_sens <- 750
-
-eon_dsa <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/configeon_dsa_deg10_r04.csv")
-
-# fix initial cases: etimes = 0
-eon_dsa$etime[eon_dsa$itime == 0] <- 0
-
-# everyone else with etime = NA is censored; they stayed in S forever
-# these people should have etimes, itimes, rtimes of inf
-eon_dsa$etime <- ifelse(is.na(eon_dsa$etime), Inf, eon_dsa$etime)
-eon_dsa$itime <- ifelse(eon_dsa$etime == Inf, Inf, eon_dsa$itime)
-eon_dsa$rtime <- ifelse(eon_dsa$etime == Inf, Inf, eon_dsa$rtime)
-
-# add indicators
-start <- 0
-begin <- 0
-end <- 75 
-eon_dsa$estat <- ifelse(eon_dsa$etime < end, 1, 0)
-eon_dsa$istat <- ifelse(eon_dsa$itime < end, 1, 0)
-eon_dsa$rtsat <- ifelse(eon_dsa$rtime < end, 1, 0)
-
-names(eon_dsa) <- c("X", "id", "eTime", "iTime", "rTime", "estat", "istat", "rstat")
-
-# take a sample of 1000 (or read in previously selected sample)
-eon_sample <- eon_dsa[sample(nrow(eon_dsa), n_sens), ]
-#write.csv(eon_sample, "sampdeg10_r04_700.csv")
-#eon_sample <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/sampdeg10_r04a.csv")
-
-# function to estimate Rt with network data
+# Function to estimate Rt with network data
 eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALSE) {
 
   full_dat <- EPIdat(dat, begin, end)
@@ -89,7 +60,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
       if (use_empEIRsurv == FALSE) {
         # add init
-        DSAest <- DSAmle(dat, empEIRsurv = NULL, method = "SANN")
+        DSAest <- DSAmle(dat, empEIRsurv = NULL, method = "L-BFGS-B")
         pvec <- as.numeric(exp(DSAest$point$point))
         beta <- pvec[1]
         lbeta <- as.numeric(DSAest$point$point)[1]
@@ -104,7 +75,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
         rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
       } else {
         empEIRsurv <- EIRsurv[i, ]
-        DSAest <- DSAmle(dat, empEIRsurv = empEIRsurv, method = "SANN")
+        DSAest <- DSAmle(dat, empEIRsurv = empEIRsurv, method = "L-BFGS-B")
         pvec <- as.numeric(exp(DSAest$point$point))
         beta <- pvec[1]
         lbeta <- as.numeric(DSAest$point$point)[1]
@@ -133,8 +104,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
       Rt_out[i, "est_S"] <- S_est
       Rt_out[i, c("beta", "delta", "gamma")] <- c(beta, delta, gamma)
       Rt_out[i, "estimate"] <- exp(lbeta - lgamma + log(S_est))
-      #Rt_out[i, "estimate"] <- beta / gamma * S_est
- 
+
       mlesamp <- DSApred_mlesamp(DSAest, empEIRsurv = empEIRsurv)
       cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
       
@@ -146,152 +116,91 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
 }
 
 
-system.time(res4 <- eon_est(dat = eon_sample, begin = 10, end = 30, width = 4, 
-                           step = 1, obs_end = TRUE, use_empEIRsurv = TRUE))
-plot(res4$time, res4$estimate, type = "l", ylim = c(0, 5))
-#write.csv(res4, "dsanet_r04_w4_10k.csv")
-
-# r02 res
-# res <- read.csv("dsanet_r02_w4_10k.csv")
-# res1 <- read.csv("dsanet_r04_w4_10k.csv")
-
-# plot(res$time, res$estimate, type = "l", ylim = c(0, 3))
-# grid()
-
-# true Rt data, (R0 = 4)
-true_sim <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/config_deg10_r04.csv")
-#write.csv(true_sim, "seir_dat_r02.csv")
-lines(true_sim$time, true_sim$true_rt, type = "l", col = "red")
-#res$true_rt <- true_sim$true_rt
-
-# get "empirical" rho estimates from proportions of S, E, I, R at each time point
-# true_sim1 <- true_sim
-# true_sim1 <- true_sim1 %>% mutate(S = S/500000, E = E/500000, I = I/500000, R = R/500000)
-# 
-# approxS <- approxfun(true_sim1$time, true_sim1$S)
-# approxE <- approxfun(true_sim1$time, true_sim1$E)
-# approxI <- approxfun(true_sim1$time, true_sim1$I)
-# approxR <- approxfun(true_sim1$time, true_sim1$R)
-
-# plots of each
-# curve(approxS(x), 0, end)
-# curve(approxE(x), 0, end)
-# curve(approxI(x), 0, end)
-# curve(approxR(x), 0, end)
-
-
-
-# true Rt data (R0 = 2)
-true_sim2 <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/config_deg100_r02.csv")
-#true_sim2 <- read.csv("seir_dat_r02.csv")
-lines(true_sim2$time, true_sim2$true_rt, col = "red")
-grid()
-# get "empirical" rho estimates from proportions of S, E, I, R at each time point
-true_sim2a <- true_sim2
-true_sim2a <- true_sim2a %>% mutate(S = S/500000, E = E/500000, I = I/500000, R = R/500000)
-
-approxS2 <- approxfun(true_sim2a$time, true_sim2a$S)
-approxE2 <- approxfun(true_sim2a$time, true_sim2a$E)
-approxI2 <- approxfun(true_sim2a$time, true_sim2a$I)
-approxR2 <- approxfun(true_sim2a$time, true_sim2a$R)
-
-
 # Cori estimates
-cori_gt <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/cori_config_pairs_deg10_r04.csv")
-#pairs_sample <- cori_gt[sample(nrow(cori_gt), 50), ]
-#pairs_sample <- cori_gt[c(1:1000), ]
+cori_est <- function(cori_gt, cori_incidence, c_cutoff) {
+  pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
+  pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
+  
+  gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
+                      "ER" = ceiling(pairs_sample$etime_infector),
+                      "SL" = floor(pairs_sample$etime_infectee),
+                      "SR" = ceiling(pairs_sample$etime_infectee))
+  gt_df[] <- lapply(gt_df, as.integer)
+  
+  mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
+  
+  config <- make_config(incid = cori_incidence$incidence,
+                        method = "si_from_data",
+                        si_parametric_distr = "G",
+                        mcmc_control = mcmc_control,
+                        n1 = 500,
+                        n2 = 50,
+                        seed = 918)
+  
+  estimate_R(incid = cori_incidence$incidence, method = "si_from_data",
+                         si_data = gt_df, 
+                         config = config)
+  
+}
 
-# find point at which S = 0.9
-c_cutoff <- min(true_sim$time[true_sim$S/500000 == 0.9])
-pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
-pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
+# # Plotting function
+# eon_plots <- function(DSA, Cori, truth, R0, width, pop, ymax) {
+#  dsa_dat <- DSA
+#  cori_dat <- Cori$R
+#  true_dat <- truth
+#  
+#  annot <- data.frame(
+#    x = end - 40,
+#    y = ymax - c(0.15, 0.2, 0.25) * (ymax - 0),
+#    label = c(
+#      paste0("R0 = ", R0),
+#      paste0("DSA window = ", width, " days"),
+#      paste0("sample = ", pop, " human sensors")
+#    )
+#  )
+#  
+#  dsa_dat %>%
+#    ggplot() +
+#    theme_minimal() +
+#    
+#    # Cori CI
+#    geom_ribbon(data = cori_dat, aes(x = (t_start + t_end) / 2, ymin = `Quantile.0.025(R)`, 
+#                                     ymax = `Quantile.0.975(R)`), fill = "gray", alpha = 0.3) +
+#    
+#    # DSA CI
+#    geom_ribbon(aes(x = time, ymin = lowerRt, ymax = upperRt), fill = "#FFDBB5", 
+#                 alpha = 0.4) +
+#    
+#    # true Rt
+#    geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", linetype = "dashed") +
+#    
+#    # Cori estimate
+#    geom_smooth(data = cori_dat, aes(x = t_start, y = `Median(R)`, color = "Cori estimate"),
+#                 se = FALSE) +
+#    geom_line(data = cori_dat, aes(x = (t_start + t_end) / 2, y = `Median(R)`, color = "Cori estimate")) +
+#    #geom_vline(xintercept = c_cutoff, linetype = "dotted") +
+#    # DSA estimate 
+#    #geom_smooth(aes(x = time, y = estimate, color = "DSA estimate"), se = FALSE) +
+#    geom_line(aes(x = time, y = estimate, color = "DSA estimate")) +
+#    
+#    labs(x = "Time (days)", y = expression(R[t]), color = NULL) +
+#    scale_color_manual(
+#      values = c(
+#        "DSA estimate" = "#DA8210",
+#        "Cori estimate" = "#006C67"
+#      )
+#    ) +
+#    geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
+#    coord_cartesian(ylim = c(0, ymax)) 
+#  }
+# 
+# eon_plots(DSA = res4, Cori = cori_res, truth = true_sim, width = 8, R0 = 4,
+#           pop = n_sens, ymax = 5)
+# 
+# eon_plots(DSA = res2, Cori = NULL, truth = true_sim2, width = 6, R0 = 2,
+#           pop = n_sens, ymax = 3)
 
-gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
-                    "ER" = ceiling(pairs_sample$etime_infector),
-                    "SL" = floor(pairs_sample$etime_infectee),
-                    "SR" = ceiling(pairs_sample$etime_infectee))
-gt_df[] <- lapply(gt_df, as.integer)
-
-cori_incidence <- read.csv("/Users/micaelarichter/Library/CloudStorage/OneDrive-TheOhioStateUniversity/python/config_incidence_deg10_r04.csv")
-names(cori_incidence) <- c("time", "incidence")
-
-mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
-
-config <- make_config(incid = cori_incidence$incidence,
-                      method = "si_from_data",
-                      si_parametric_distr = "G",
-                      mcmc_control = mcmc_control,
-                      n1 = 500,
-                      n2 = 50,
-                      seed = 918)
-
-system.time(cori_res <- estimate_R(incid = cori_incidence$incidence, method = "si_from_data",
-                       si_data = gt_df, 
-                       config = config))
-#write.csv(cori_res$R, "1573c_r02_deg50.csv")
-#write.csv(cori_res$R, "2k_r04_deg10a_cori.csv")
-#write.csv(cori_res$R, "3k_r04_cori.csv")
-#plot(cori_res)
-
-#cori_res <- read.csv("2k_r04_deg10a_cori.csv")
-
-# plotting function
-eon_plots <- function(DSA, Cori, truth, R0, width, pop, ymax) {
- dsa_dat <- DSA
- cori_dat <- Cori$R
- true_dat <- truth
- 
- annot <- data.frame(
-   x = end - 40,
-   y = ymax - c(0.15, 0.2, 0.25) * (ymax - 0),
-   label = c(
-     paste0("R0 = ", R0),
-     paste0("DSA window = ", width, " days"),
-     paste0("sample = ", pop, " human sensors")
-   )
- )
- 
- dsa_dat %>%
-   ggplot() +
-   theme_minimal() +
-   
-   # Cori CI
-   geom_ribbon(data = cori_dat, aes(x = (t_start + t_end) / 2, ymin = `Quantile.0.025(R)`, 
-                                    ymax = `Quantile.0.975(R)`), fill = "gray", alpha = 0.3) +
-   
-   # DSA CI
-   geom_ribbon(aes(x = time, ymin = lowerRt, ymax = upperRt), fill = "#FFDBB5", 
-                alpha = 0.4) +
-   
-   # true Rt
-   geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", linetype = "dashed") +
-   
-   # Cori estimate
-   geom_smooth(data = cori_dat, aes(x = t_start, y = `Median(R)`, color = "Cori estimate"),
-                se = FALSE) +
-   geom_line(data = cori_dat, aes(x = (t_start + t_end) / 2, y = `Median(R)`, color = "Cori estimate")) +
-   #geom_vline(xintercept = c_cutoff, linetype = "dotted") +
-   # DSA estimate 
-   #geom_smooth(aes(x = time, y = estimate, color = "DSA estimate"), se = FALSE) +
-   geom_line(aes(x = time, y = estimate, color = "DSA estimate")) +
-   
-   labs(x = "Time (days)", y = expression(R[t]), color = NULL) +
-   scale_color_manual(
-     values = c(
-       "DSA estimate" = "#DA8210",
-       "Cori estimate" = "#006C67"
-     )
-   ) +
-   geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
-   coord_cartesian(ylim = c(0, ymax)) 
- }
-
-eon_plots(DSA = res4, Cori = cori_res, truth = true_sim, width = 8, R0 = 4,
-          pop = n_sens, ymax = 5)
-
-eon_plots(DSA = res2, Cori = NULL, truth = true_sim2, width = 6, R0 = 2,
-          pop = n_sens, ymax = 3)
-# smoothed estimate using many windows
+# Smoothed estimate using many windows
 adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   
   # estimate Rt at different window sizes
@@ -335,18 +244,14 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
     mu <- as.numeric(rt_trim[i, rt_cols])
     lmu <- log(mu)
     vars <- as.numeric(rt_trim[i, var_cols])
-    # var(log(rt))
     lvars <- vars / mu^2
     Sigma <- diag(vars)
     lSigma <- diag(lvars)
     #browser()
-    
-    #samples <- mvrnorm(4000, mu = mu, Sigma = Sigma)
     lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
     
     weights <- 1/vars
     weights <- weights/sum(weights)
-    #rt_sim <- apply(samples, 1, function(x)  sample(x, size = 1, prob = weights))
     lrt_sim <- apply(lsamples, 1, function(x) sample(x, size = 1, prob = weights))
     
     lower[i] <- exp(quantile(lrt_sim, 0.025))
@@ -363,11 +268,8 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   return(list(rt_trim, rt_all, res_df))
 }
 
-windows_deg10_4 <- adaptive_smooth1(c(2, 4, 6, 8))
-#write.csv(windows_deg10_4, "smooth_r04_deg10.csv")  
 
-
-# adaptive window plot
+# Adaptive window plot
 adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
   
   dsa_dat <- DSAsmooth
@@ -418,12 +320,6 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
     geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
     coord_cartesian(ylim = c(0, ymax), xlim = c(0, 60))
 }
-
-adaptive_smooth_plot(DSA = windows_deg10_4[[3]], Cori = cori_res, truth = true_sim, R0 = 4,
-          pop = n_sens, ymax = 5)
-
-
-
 
 
 
