@@ -28,6 +28,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
                        "delta" = rep(NA, length(tstarts)),
                        "gamma" = rep(NA, length(tstarts)),
                        "est_S" = rep(NA, length(tstarts)),
+                       "R0" = rep(NA, length(tstarts)),
                        "rt_var" = rep(NA, length(tstarts)))
 
   names(dat) <- c("X", "id", "Etime", "Itime", "Rtime", "Estat", "Istat", "Rstat")
@@ -104,6 +105,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
       Rt_out[i, "est_S"] <- S_est
       Rt_out[i, c("beta", "delta", "gamma")] <- c(beta, delta, gamma)
       Rt_out[i, "estimate"] <- exp(lbeta - lgamma + log(S_est))
+      Rt_out[i, "R0"] <- exp(lbeta - lgamma)
 
       mlesamp <- DSApred_mlesamp(DSAest, empEIRsurv = empEIRsurv)
       cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
@@ -207,10 +209,11 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   window_list <- lapply(windows_vec, function(x) {
     eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
             step = 1, obs_end = TRUE, use_empEIRsurv = TRUE) %>%
-    dplyr::select(time, estimate, beta, gamma, rt_var) %>%
+    dplyr::select(time, estimate, beta, gamma, R0, rt_var) %>%
     dplyr::rename(!!paste0("rt", x) := estimate,
                   !!paste0("beta", x) := beta,
                   !!paste0("gamma", x) := gamma,
+                  !!paste0("R0", x) := R0,
                   !!paste0("var", x) := rt_var)
   })
   
@@ -230,7 +233,7 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   rt_mat <- as.matrix(rt_trim[ , rt_cols])
   var_mat <- as.matrix(rt_trim[ , var_cols])
   
-  precision <- rowSums(1/var_mat)
+  precision <- rowSums(1/var_mat) # na.rm = T
   rt_comb <- rowSums(rt_mat/var_mat) / precision
   var_comb <- 1/precision
   
@@ -318,7 +321,7 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
       )
     ) +
     geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
-    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 60))
+    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 200))
 }
 
 
