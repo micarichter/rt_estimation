@@ -38,6 +38,45 @@ SEIRepidemic <- function(
   epidemic
 }
 
+# log transformed SEIR model; omit dlogR to avoid log(0)
+logKMode <- function(t, state, parameters) {
+  with(as.list(c(state, parameters)), {
+    # ODEs
+    dlogS <- -beta * exp(logI)
+    dlogE <- beta * exp(logS + logI - logE) - delta
+    dlogI <- delta * exp(logE - logI) - gamma
+    #dlogR <- gamma * exp(logI - logR)
+    
+    # return ODE solution
+    list(c(dlogS, dlogE, dlogI))
+  })
+}
+
+# solve log ODEs
+logSEIRepidemic <- function(
+    beta = 2, delta = 0.5, gamma = 1, logrhoE = log(0.02), logrhoI = log(0.05), 
+    logrhoS = log(0.93), tmin = 0, tmax = 60, tstep = 0.1
+) {
+  # rho is the prevalence of infection at tmin
+  parameters <- c(beta = beta, delta = delta, gamma = gamma, logrhoE = logrhoE, 
+                  logrhoI = logrhoI, logrhoS = logrhoS)
+  times <- seq(tmin, tmax, by = tstep)
+  state <- c(logS = logrhoS, logE = logrhoE, logI = logrhoI)
+  KMsolve <- ode(y = state, times = times, func = logKMode,
+                 parms = parameters)
+  
+  # collect attributes from deSolve and data.frame into epidemic
+  epidemic <- as.data.frame(KMsolve)
+  mostattributes(epidemic) <- append(attributes(epidemic), attributes(KMsolve))
+  class(epidemic) <- c("data.frame", "deSolve")
+  attr(epidemic, "parameters") <- parameters
+  attr(epidemic, "tstep") <- tstep
+  
+  # return epidemic
+  epidemic
+}
+
+
 # conveniently retrieve epidemic parameters and R0 on log or original scales
 # tstart is the beginning of observation for the human sensor network
 SEIRparams <- function(epidemic, tstart, ln = FALSE) {
@@ -352,34 +391,50 @@ nloglikDSA <- function(pvec, data, tstep, fvec) {
   rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
   rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
   
-  state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
+  state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE), 
+             logI = log(rhoI))
   params <- c(beta = exp(lnbeta), delta = exp(lndelta), gamma = exp(lngamma))
-  odesolve <- ode(y = state, times = times, func = KMode, parms = params)
+  odesolve <- ode(y = state, times = times, func = logKMode, parms = params)
   logSfun <- approxfun(
-    odesolve[, "time"], log(odesolve[, "S"]),
-    yleft = log(1 - rhoE - rhoI - rhoR), yright = log(odesolve[nrow(odesolve), "S"]))
+    odesolve[, "time"], odesolve[, "logS"],
+    yleft = log(1 - rhoE - rhoI - rhoR), 
+    yright = odesolve[nrow(odesolve), "logS"])
   logIfun <- approxfun(
-    odesolve[, "time"], log(odesolve[, "I"]), 
-    yleft = log(rhoI), yright = log(odesolve[nrow(odesolve), "I"]))
+    odesolve[, "time"], odesolve[, "logI"], 
+    yleft = log(rhoI), yright = odesolve[nrow(odesolve), "logI"])
   lnrhoE <- log(rhoE)
   lnrhoI <- log(rhoI)
   lnrhoR <- log(rhoR)
   
   # +1/2 is a small sample correction
   with(data, {
+    # from E
     loglikS <- sum(logSfun(Etime[Erisk == 1])) 
     exposed <- (Erisk == 1) & (Estat == 1)
     loglikE <- (lnbeta * sum(exposed) + sum(logIfun(Etime[exposed])))
-    loglikE <- loglikE + lnrhoE * sum((Erisk == 0) & (Irisk == 1))
+    nE <- sum((Erisk == 0) & (Irisk == 1)) # number initially exposed
+    if (nE > 0) {
+      loglikE <- loglikE + lnrhoE * nE
+    }
+    
+    # from I
     infected <- (Irisk == 1) & (Istat == 1)
     #loglikI <- lndelta * sum(infected) - exp(lndelta) * sum(Itime - Etime) 
     loglikI <- lndelta * (sum(infected) + 1/2) - exp(lndelta) * sum(Itime - Etime) 
-    loglikI <- loglikI + lnrhoI * sum((Irisk == 0) & (Rrisk == 1))
+    nI <- sum((Irisk == 0) & (Rrisk == 1)) # number initially infected 
+    if (nI > 0) {
+      loglikI <- loglikI + lnrhoI * nI
+    }
+    
+    # from R
     recovered <- (Rrisk == 1) & (Rstat == 1)
     #loglikR <- lngamma * sum(recovered) - exp(lngamma) * sum(Rtime - Itime)
     loglikR <- lngamma * (sum(recovered) + 1/2) - exp(lngamma) * sum(Rtime - Itime)
-    loglikR <- loglikR + lnrhoR * sum((Rrisk == 0) & (Rstat == 1))
-    
+    nR <- sum((Rrisk == 0) & (Rstat == 1)) # number initially recovered
+    if (nR > 0) {
+      loglikR <- loglikR + lnrhoR * nR
+    } 
+   
     # return negative log likelihood
     -(loglikS + loglikE + loglikI + loglikR)
   })
@@ -592,10 +647,12 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     rhoE <- xrhoE / (1 + xrhoE + xrhoI + xrhoR)
     rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
     rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
+    #rhoS <- 1 - rhoE - rhoI - rhoR
+    #state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE), 
+    #           logI = log(rhoI))
     state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-    KMsolve <- ode(
-      y = state, times = times, func = KMode, parms = parameters)
-    S[i, ] <- KMsolve[, "S"]
+    KMsolve <- ode(y = state, times = times, func = KMode, parms = parameters)
+    S[i,] <- KMsolve[, "S"]
     logS <- log(S[i,])
     E[i, ] <- KMsolve[, "E"]
     I[i, ] <- KMsolve[, "I"]
@@ -617,14 +674,14 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   upperE <- apply(E, 2, upperq)
   lowerI <- apply(I, 2, lowerq)
   upperI <- apply(I, 2, upperq)
-  lowerR <- apply(R, 2, lowerq)
-  upperR <- apply(R, 2, upperq)
+  #lowerR <- apply(R, 2, lowerq)
+  #upperR <- apply(R, 2, upperq)
   lowerlRt <- apply(logRt, 2, lowerq)
   upperlRt <- apply(logRt, 2, upperq)
   lowerRt <- exp(lowerlRt)
   upperRt <- exp(upperlRt)
-  #lowerRt <- apply(Rt, 2, lowerq)
-  #upperRt <- apply(Rt, 2, upperq)
+  lowerRt <- apply(Rt, 2, lowerq)
+  upperRt <- apply(Rt, 2, upperq)
   Rt_med <- apply(Rt, 2, median)
   Rt_var <- apply(Rt, 2, var)
   # return confidence limits
@@ -633,7 +690,7 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     lowerS = lowerS, upperS = upperS,
     lowerE = lowerE, upperE = upperE,
     lowerI = lowerI, upperI = upperI,
-    lowerR = lowerR, upperR = upperR,
+    #lowerR = lowerR, upperR = upperR,
     lowerRt = lowerRt, upperRt = upperRt,
     Rt = Rt_med, Rt_var = Rt_var,
     row.names = NULL)
