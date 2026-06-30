@@ -648,15 +648,18 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
     rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
     #rhoS <- 1 - rhoE - rhoI - rhoR
-    #state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE), 
-    #           logI = log(rhoI))
-    state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-    KMsolve <- ode(y = state, times = times, func = KMode, parms = parameters)
-    S[i,] <- KMsolve[, "S"]
-    logS <- log(S[i,])
-    E[i, ] <- KMsolve[, "E"]
-    I[i, ] <- KMsolve[, "I"]
-    R[i, ] <- KMsolve[, "R"]
+    state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE),
+              logI = log(rhoI))
+    #state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
+    KMsolve <- ode(y = state, times = times, func = logKMode, parms = parameters)
+    logS <- KMsolve[, "logS"]
+    S[i, ] <- exp(logS)
+    #logS <- log(S[i,])
+    logE <- KMsolve[, "logE"]
+    E[i, ] <- exp(logE)
+    logI <- KMsolve[, "logI"]
+    I[i, ] <- exp(logI)
+    R[i, ] <- 1 - (S[i, ] + E[i, ] + I[i, ])
     logRt[i, ] <- as.matrix(lbeta - lgamma + logS)
     Rt[i, ] <- exp(logRt[i, ])
     
