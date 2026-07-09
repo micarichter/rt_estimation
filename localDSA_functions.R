@@ -529,25 +529,31 @@ DSAsummary <- function(DSAest, invln = FALSE) {
 
 ## maximum likelihood model fit and predictions -------------------------------
 ## model fit and predictions --------------------------------------------------
-DSApredict <- function(point, times, samples, level = 0.95) {
+DSApredict <- function(point, times, samples, level = 0.95, empEIRsurv = NULL) {
   # point estimates are lnbeta, lndelta, lngamma
   # times is a vector of times at which the SEIR curves should be plotted
   # samples is a set of multivariate normal or MC posterior samples
   # samples and level are ignored unless ci = TRUE
-  
+  if (is.null(empEIRsurv)) {
+    xrhos <- exp(point[4:6])
+    rho_total <- 1 + sum(xrhos)
+    rhoE <- xrhos[1] / rho_total
+    rhoI <- xrhos[2] / rho_total
+    rhoR <- xrhos[3] / rho_total
+    
+    params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
+    
+    state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
+    KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
+  } else {
+    rhoE <- rhoE_fixed(tstart)
+    rhoI <- rhoI_fixed(tstart)
+    rhoR <- rhoR_fixed(tstart)
   # run ODE at point estimate
-  # xrhos <- exp(point[4:6])
-  # rho_total <- 1 + sum(xrhos)
-  # rhoE <- xrhos[1] / rho_total
-  # rhoI <- xrhos[2] / rho_total
-  # rhoR <- xrhos[3] / rho_total
-  rhoE <- rhoE_fixed(tstart)
-  rhoI <- rhoI_fixed(tstart)
-  rhoR <- rhoR_fixed(tstart)
-  params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
-  
-  state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-  KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
+    params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
+    state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
+    KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
+  }
   
   # calculate confidence limits if needed and return epidemic
   epidemic <- as.data.frame(KMsolve)
@@ -908,195 +914,6 @@ DSA_drop <- function(dat, droptime) {
 
 }
 
-# fit data and estimate parameters over a sliding window
-DSA_window <- function(epidemic) {
-  # make parameter plots
-  width <- 5
-  tstarts <- seq(0, 37, by = 1)
-  param_names <- c("lnbeta", "lndelta", "lngamma", "lnrhoE", "lnrhoI", "lnrhoR", "lnR0")
-  
-  est <- matrix(nrow = length(tstarts), ncol = 7)
-  lwr <- matrix(nrow = length(tstarts), ncol = 7)
-  upr <- matrix(nrow = length(tstarts), ncol = 7)
-  stderr <- matrix(nrow = length(tstarts), ncol = 7)
-  colnames(est) <- param_names
-  colnames(lwr) <- param_names
-  colnames(upr) <- param_names
-  colnames(stderr) <- param_names
-  
-  for (i in 1:length(tstarts)) {
-    try({
-      tstart <- tstarts[i]
-      hsdat_i <- HSdat(5000, epidemic, tstart = tstart, tstop = tstart + width)
-      DSAest_i <- DSAmle(hsdat_i, method = "L-BFGS-B")
-      est[i, 1:6] <- DSAest_i$point[, 1]
-      est[i, 7] <- DSAest_i$lnR0[1]
-      lwr[i, 1:6] <- DSAest_i$interval[, 1] 
-      lwr[i, 7] <- DSAest_i$lnR0[2]
-      upr[i, 1:6] <- DSAest_i$interval[, 2]
-      upr[i, 7] <- DSAest_i$lnR0[3]
-      stderr[i, ] <- DSAest_i$stderr
-    })
-  }
-  
-  est <- data.frame(est, tstart = tstarts)
-  stderr <- data.frame(stderr, tstart = tstarts)
-  lwr <- data.frame(lwr, tstart = tstarts)
-  upr <- data.frame(upr, tstart = tstarts)
-  
-  est_long <- est %>%
-    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "est")
-  
-  lwr_long <- lwr %>%
-    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "lwr")
-  
-  upr_long <- upr %>%
-    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "upr")
-  
-  plot_data <- est_long %>%
-    left_join(lwr_long, by = c("tstart", "parameter")) %>%
-    left_join(upr_long, by = c("tstart", "parameter"))
-  
-  p1 <- plot_data %>%
-    filter(parameter == "lnbeta") %>%
-    ggplot() +
-    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
-    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
-    geom_hline(yintercept = log(0.5), linetype = "solid", color = "black") +
-    labs(
-      x = "tstart", 
-      y = "lnbeta est", 
-      title = "log(beta) estimates"
-    ) +
-    coord_cartesian(ylim = c(-2, 0)) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  p2 <- plot_data %>%
-    filter(parameter == "lndelta") %>%
-    ggplot() +
-    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
-    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
-    geom_hline(yintercept = log(0.3), linetype = "solid", color = "black") +
-    labs(
-      x = "tstart", 
-      y = "lndelta est", 
-      title = "log(delta) estimates"
-    ) +
-    coord_cartesian(ylim = c(-2, 0)) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  p3 <- plot_data %>%
-    filter(parameter == "lngamma") %>%
-    ggplot() +
-    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
-    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
-    geom_hline(yintercept = log(0.2), linetype = "solid", color = "black") +
-    labs(
-      x = "tstart", 
-      y = "lngamma est", 
-      title = "log(gamma) estimates"
-    ) +
-    coord_cartesian(ylim = c(-2, 0)) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  p4 <- plot_data %>%
-    filter(parameter == "lnR0") %>%
-    ggplot() +
-    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
-    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
-    geom_hline(yintercept = log(2.5), linetype = "solid", color = "black") +
-    coord_cartesian(ylim = c(0, 2)) +
-    labs(
-      x = "tstart", 
-      y = "lnR0 est", 
-      title = "log(R0) estimates"
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  # plot std errors
-  s1 <- ggplot(data = stderr) +
-    geom_line(aes(x = tstart, y = lnbeta), color = "blue") +
-    coord_cartesian(ylim = c(0, 0.15)) +
-    labs(
-      x = "",
-      y = "",
-      title = expression(ln(beta))
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  s2 <- ggplot(data = stderr) +
-    geom_line(aes(x = tstart, y = lndelta), color = "blue") +
-    coord_cartesian(ylim = c(0, 0.15)) +
-    labs(
-      x = "",
-      y = "",
-      title = expression(ln(delta))
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  s3 <- ggplot(data = stderr) +
-    geom_line(aes(x = tstart, y = lngamma), color = "blue") +
-    coord_cartesian(ylim = c(0, 0.15)) +
-    labs(
-      x = "",
-      y = "",
-      title = expression(ln(gamma))
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  s4 <- ggplot(data = stderr) +
-    geom_line(aes(x = tstart, y = lnR0), color = "blue") +
-    coord_cartesian(ylim = c(0, 0.15)) +
-    labs(
-      x = "",
-      y = "",
-      title = expression(ln(R[0]))
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      axis.text = element_text(size = 12),
-      axis.title = element_text(size = 14)
-    )
-  
-  list(plot_grid(p1, p2, p3, p4) ,plot_grid(s1, s2, s3, s4))
-}
-
 # fit epicast data and estimate parameters over a sliding window
 EPI_window <- function(dat) {
   width <- 14
@@ -1120,7 +937,7 @@ EPI_window <- function(dat) {
       DSAest_i <- DSAmle(hsdat_i, method = "L-BFGS-B")
       est[i, 1:6] <- DSAest_i$point[, 1]
       est[i, 7] <- DSAest_i$lnR0[1]
-      lwr[i, 1:6] <- DSAest_i$interval[, 1] 
+      lwr[i, 1:6] <- DSAest_i$interval[, 1]
       lwr[i, 7] <- DSAest_i$lnR0[2]
       upr[i, 1:6] <- DSAest_i$interval[, 2]
       upr[i, 7] <- DSAest_i$lnR0[3]
@@ -1154,7 +971,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "", 
-      title = expression(ln(beta))
+      title = expression(plain(ln) ~ beta)
     ) +
     theme_minimal() +
     theme(
@@ -1171,7 +988,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "", 
-      title = expression(ln(delta))
+      title = expression(plain(ln) ~ delta)
     ) +
     theme_minimal() +
     theme(
@@ -1188,7 +1005,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "", 
-      title = expression(ln(gamma))
+      title = expression(plain(ln) ~ gamma)
     ) +
     theme_minimal() +
     theme(
@@ -1205,7 +1022,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "", 
-      title = expression(ln(R[0]))
+      title = expression(plain(ln) ~ R[0])
     ) +
     theme_minimal() +
     theme(
@@ -1215,10 +1032,8 @@ EPI_window <- function(dat) {
     )
   
   e1 <- ggdraw(plot_grid(p1, p2, p3, p4)) +
-          draw_label("tstart", x = 0.5, y = 0, vjust = -1, angle = 0, 
-                      size = 14) +
-                      draw_label("Point estimate", x = 0, 
-                      y = 0.5, vjust = 1.5, angle = 90, size = 14)
+          draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+                      size = 14)
   
   # plot std errors
   s1 <- ggplot(data = stderr) +
@@ -1227,7 +1042,7 @@ EPI_window <- function(dat) {
     labs(
       x = "",
       y = "",
-      title = expression(ln(beta))
+      title = expression(plain(ln) ~ beta)
     ) +
     theme_minimal() +
     theme(
@@ -1242,7 +1057,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "",
-      title = expression(ln(delta))
+      title = expression(plain(ln) ~ delta)
     ) +
     theme_minimal() +
     theme(
@@ -1257,7 +1072,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "",
-      title = expression(ln(gamma))
+      title = expression(plain(ln) ~ gamma)
     ) +
     theme_minimal() +
     theme(
@@ -1272,7 +1087,7 @@ EPI_window <- function(dat) {
     labs(
       x = "", 
       y = "",
-      title = expression(ln(R[0]))
+      title = expression(plain(ln) ~ R[0])
     ) +
     theme_minimal() +
     theme(
@@ -1282,13 +1097,200 @@ EPI_window <- function(dat) {
     )
   
   e2 <- ggdraw(plot_grid(s1, s2, s3, s4)) + 
-    draw_label("tstart", x = 0.5, y = 0, vjust = -1, angle = 0, 
-               size = 14) +
-    draw_label("Standard errors", x = 0, 
-               y = 0.5, vjust = 1.5, angle = 90, size = 14)
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14)
   
   list(e1, e2)
 }
+
+EPI_window_exp <- function(dat) {
+  width <- 14
+  tstarts <- seq(50, 186, by = 1)
+  param_names <- c("lnbeta", "lndelta", "lngamma", "lnrhoE", "lnrhoI", "lnrhoR", "lnR0")
+  
+  est <- matrix(nrow = length(tstarts), ncol = 7)
+  lwr <- matrix(nrow = length(tstarts), ncol = 7)
+  upr <- matrix(nrow = length(tstarts), ncol = 7)
+  stderr <- matrix(nrow = length(tstarts), ncol = 7)
+  colnames(est) <- param_names
+  colnames(lwr) <- param_names
+  colnames(upr) <- param_names
+  colnames(stderr) <- param_names
+  
+  for (i in 1:length(tstarts)) {
+    try({
+      tstart <- tstarts[i]
+      dat_i <- dat[sample(nrow(dat), 5000), ]
+      hsdat_i <- EPIdat(dat_i, tstart = tstart, tstop = tstart + width)
+      DSAest_i <- DSAmle(hsdat_i, method = "L-BFGS-B")
+      est[i, 1:6] <- exp(DSAest_i$point[, 1])
+      est[i, 7] <- exp(DSAest_i$lnR0[1])
+      lwr[i, 1:6] <- exp(DSAest_i$interval[, 1]) 
+      lwr[i, 7] <- exp(DSAest_i$lnR0[2])
+      upr[i, 1:6] <- exp(DSAest_i$interval[, 2])
+      upr[i, 7] <- exp(DSAest_i$lnR0[3])
+      stderr[i, ] <- DSAest_i$stderr
+    })
+  }
+  
+  est <- data.frame(est, tstart = tstarts)
+  stderr <- data.frame(stderr, tstart = tstarts)
+  lwr <- data.frame(lwr, tstart = tstarts)
+  upr <- data.frame(upr, tstart = tstarts)
+  
+  est_long <- est %>%
+    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "est")
+  
+  lwr_long <- lwr %>%
+    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "lwr")
+  
+  upr_long <- upr %>%
+    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "upr")
+  
+  plot_data <- est_long %>%
+    left_join(lwr_long, by = c("tstart", "parameter")) %>%
+    left_join(upr_long, by = c("tstart", "parameter"))
+  
+  p1 <- plot_data %>%
+    filter(parameter == "lnbeta") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(beta)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    ) + coord_cartesian(ylim = c(0, NA))
+  
+  p2 <- plot_data %>%
+    filter(parameter == "lndelta") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = 1/lwr, ymax = 1/upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = 1/est), linetype = "dotted", color = "blue") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(1/delta)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    ) + coord_cartesian(ylim = c(0, NA))
+  
+  p3 <- plot_data %>%
+    filter(parameter == "lngamma") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = 1/lwr, ymax = 1/upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = 1/est), linetype = "dotted", color = "blue") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(1/gamma)
+    ) + 
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    ) + coord_cartesian(ylim = c(0, NA))
+  
+  p4 <- plot_data %>%
+    filter(parameter == "lnR0") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(R[0])
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    ) + coord_cartesian(ylim = c(0, NA))
+  
+  e1 <- ggdraw(plot_grid(p1, p2, p3, p4)) +
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14) 
+  
+  # plot std errors
+  s1 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lnbeta), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.2)) +
+    labs(
+      x = "",
+      y = "",
+      title = expression(plain(ln) ~ beta)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s2 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lndelta), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.2)) +
+    labs(
+      x = "", 
+      y = "",
+      title = expression(plain(ln) ~ delta)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s3 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lngamma), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.2)) +
+    labs(
+      x = "", 
+      y = "",
+      title = expression(plain(ln) ~ gamma)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s4 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lnR0), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.2)) +
+    labs(
+      x = "", 
+      y = "",
+      title = expression(plain(ln) ~ R[0])
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  e2 <- ggdraw(plot_grid(s1, s2, s3, s4)) + 
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14) 
+  
+  list(e1, e2)
+}
+
 
 # estimate parameters across a sliding window using synthetic data, and plot
 DSA_window <- function(epidemic) {
@@ -1351,9 +1353,9 @@ DSA_window <- function(epidemic) {
     geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
     geom_hline(yintercept = log(0.5), linetype = "solid", color = "black") +
     labs(
-      x = "tstart", 
-      y = "lnbeta est", 
-      title = "log(beta) estimates"
+      x = "", 
+      y = "", 
+      title = expression(plain(ln) ~ beta)
     ) +
     coord_cartesian(ylim = c(-2, 0)) +
     theme_minimal() +
@@ -1370,9 +1372,9 @@ DSA_window <- function(epidemic) {
     geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
     geom_hline(yintercept = log(0.3), linetype = "solid", color = "black") +
     labs(
-      x = "tstart", 
-      y = "lndelta est", 
-      title = "log(delta) estimates"
+      x = "", 
+      y = "", 
+      title = expression(plain(ln) ~ delta)
     ) +
     coord_cartesian(ylim = c(-2, 0)) +
     theme_minimal() +
@@ -1389,9 +1391,9 @@ DSA_window <- function(epidemic) {
     geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
     geom_hline(yintercept = log(0.2), linetype = "solid", color = "black") +
     labs(
-      x = "tstart", 
-      y = "lngamma est", 
-      title = "log(gamma) estimates"
+      x = "", 
+      y = "", 
+      title = expression(plain(ln) ~ gamma)
     ) +
     coord_cartesian(ylim = c(-2, 0)) +
     theme_minimal() +
@@ -1409,9 +1411,9 @@ DSA_window <- function(epidemic) {
     geom_hline(yintercept = log(2.5), linetype = "solid", color = "black") +
     coord_cartesian(ylim = c(0, 2)) +
     labs(
-      x = "tstart", 
-      y = "lnR0 est", 
-      title = "log(R0) estimates"
+      x = "", 
+      y = "", 
+      title = expression(plain(ln) ~ R[0])
     ) +
     theme_minimal() +
     theme(
@@ -1419,6 +1421,9 @@ DSA_window <- function(epidemic) {
       axis.text = element_text(size = 12),
       axis.title = element_text(size = 14)
     )
+  p1 <- ggdraw(plot_grid(p1, p2, p3, p4)) +
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14) 
   
   # plot std errors
   s1 <- ggplot(data = stderr) +
@@ -1427,7 +1432,7 @@ DSA_window <- function(epidemic) {
     labs(
       x = "",
       y = "",
-      title = expression(ln(beta))
+      title = expression(plain(ln) ~ beta)
     ) +
     theme_minimal() +
     theme(
@@ -1442,7 +1447,7 @@ DSA_window <- function(epidemic) {
     labs(
       x = "",
       y = "",
-      title = expression(ln(delta))
+      title = expression(plain(ln) ~ delta)
     ) +
     theme_minimal() +
     theme(
@@ -1457,7 +1462,7 @@ DSA_window <- function(epidemic) {
     labs(
       x = "",
       y = "",
-      title = expression(ln(gamma))
+      title = expression(plain(ln) ~ gamma)
     ) +
     theme_minimal() +
     theme(
@@ -1472,7 +1477,7 @@ DSA_window <- function(epidemic) {
     labs(
       x = "",
       y = "",
-      title = expression(ln(R[0]))
+      title = expression(plain(ln) ~ R[0])
     ) +
     theme_minimal() +
     theme(
@@ -1481,7 +1486,213 @@ DSA_window <- function(epidemic) {
       axis.title = element_text(size = 14)
     )
   
-  list(plot_grid(p1, p2, p3, p4) ,plot_grid(s1, s2, s3, s4))
+  s1 <- ggdraw(plot_grid(s1, s2, s3, s4)) +
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14)
+    
+  list(p1, s1)
+}
+
+DSA_window_exp <- function(epidemic) {
+  # make parameter plots
+  width <- 5
+  tstarts <- seq(0, 37, by = 1)
+  est <- matrix(nrow = length(tstarts), ncol = 7)
+  lwr <- matrix(nrow = length(tstarts), ncol = 7)
+  upr <- matrix(nrow = length(tstarts), ncol = 7)
+  stderr <- matrix(nrow = length(tstarts), ncol = 7)
+  colnames(est) <- c(
+    "lnbeta", "lndelta", "lngamma", "lnrhoE", "lnrhoI", "lnrhoR", "lnR0")
+  colnames(lwr) <- c(
+    "lnbeta", "lndelta", "lngamma", "lnrhoE", "lnrhoI", "lnrhoR", "lnR0")
+  colnames(upr) <- c(
+    "lnbeta", "lndelta", "lngamma", "lnrhoE", "lnrhoI", "lnrhoR", "lnR0")
+  colnames(stderr) <- c(
+    "lnbeta", "lndelta", "lngamma", "lnrhoE", "lnrhoI", "lnrhoR", "lnR0")
+  for (i in 1:length(tstarts)) {
+    try({
+      tstart <- tstarts[i]
+      hsdat_i <- HSdat(5000, epidemic, tstart = tstart, tstop = tstart + width)
+      DSAest_i <- DSAmle(hsdat_i, method = "L-BFGS-B")
+      est[i, 1:6] <- exp(DSAest_i$point[, 1])
+      est[i, 7] <- exp(DSAest_i$lnR0[1])
+      lwr[i, 1:6] <- exp(DSAest_i$interval[, 1]) 
+      lwr[i, 7] <- exp(DSAest_i$lnR0[2])
+      upr[i, 1:6] <- exp(DSAest_i$interval[, 2])
+      upr[i, 7] <- exp(DSAest_i$lnR0[3])
+      stderr[i, ] <- DSAest_i$stderr
+    })
+  }
+  
+  est <- data.frame(est)
+  est$tstart <- tstarts
+  stderr <- data.frame(stderr)
+  stderr$tstart <- tstarts
+  lwr <- data.frame(lwr)
+  lwr$tstart <- tstarts
+  upr <- data.frame(upr)
+  upr$tstart <- tstarts
+  stderr[, 1:3] <- stderr[, 1:3] * est[, 1:3]
+  
+  est_long <- est %>%
+    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "est")
+  
+  lwr_long <- lwr %>%
+    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "lwr")
+  
+  upr_long <- upr %>%
+    pivot_longer(cols = starts_with("ln"), names_to = "parameter", values_to = "upr")
+  
+  plot_data <- est_long %>%
+    left_join(lwr_long, by = c("tstart", "parameter")) %>%
+    left_join(upr_long, by = c("tstart", "parameter"))
+  
+  p1 <- plot_data %>%
+    filter(parameter == "lnbeta") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
+    geom_hline(yintercept = 0.5, linetype = "solid", color = "black") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(beta)
+    ) +
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  p2 <- plot_data %>%
+    filter(parameter == "lndelta") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = 1/lwr, ymax = 1/upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = 1/est), linetype = "dotted", color = "blue") +
+    geom_hline(yintercept = 1/0.3, linetype = "solid", color = "black") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(1/delta)
+    ) +
+    coord_cartesian(ylim = c(0, 6)) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  p3 <- plot_data %>%
+    filter(parameter == "lngamma") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = 1/lwr, ymax = 1/upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = 1/est), linetype = "dotted", color = "blue") +
+    geom_hline(yintercept = 1/0.2, linetype = "solid", color = "black") +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(1/gamma)
+    ) +
+    coord_cartesian(ylim = c(0, 7)) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  p4 <- plot_data %>%
+    filter(parameter == "lnR0") %>%
+    ggplot() +
+    geom_ribbon(aes(x = tstart, ymin = lwr, ymax = upr), fill = "lightblue", alpha = 0.5) +
+    geom_line(aes(x = tstart, y = est), linetype = "dotted", color = "blue") +
+    geom_hline(yintercept = 2.5, linetype = "solid", color = "black") +
+    coord_cartesian(ylim = c(0, 6)) +
+    labs(
+      x = "", 
+      y = "", 
+      title = expression(R[0])
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  p1 <- ggdraw(plot_grid(p1, p2, p3, p4)) + 
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14) 
+  
+  # plot std errors
+  s1 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lnbeta), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.15)) +
+    labs(
+      x = "",
+      y = "",
+      title = expression(beta)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s2 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lndelta), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.15)) +
+    labs(
+      x = "",
+      y = "",
+      title = expression(delta)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s3 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lngamma), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.15)) +
+    labs(
+      x = "",
+      y = "",
+      title = expression(gamma)
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s4 <- ggplot(data = stderr) +
+    geom_line(aes(x = tstart, y = lnR0), color = "blue") +
+    coord_cartesian(ylim = c(0, 0.15)) +
+    labs(
+      x = "",
+      y = "",
+      title = expression(R[0])
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 14)
+    )
+  
+  s1 <- ggdraw(plot_grid(s1, s2, s3, s4)) + 
+    draw_label("window start time", x = 0.5, y = 0, vjust = -1, angle = 0, 
+               size = 14) 
+  
+  list(p1, s1)
 }
 
 # end <- 60
@@ -1554,6 +1765,118 @@ window_predict2 <- function(i) {
   }
   return(list(res_S = res_S, res_I = res_I, bias = bias))
 }
+
+lrt_fun <- function() {
+  width <- 14
+  tstarts <- seq(40, 199, by = width)
+  iter <- 100
+  LRdat <- data.frame(iter = NA,
+                      tstart = NA,
+                      H0 = NA,
+                      H1 = NA,
+                      H2 = NA,
+                      ratio1 = NA,
+                      ratio2 = NA,
+                      LRstat = NA)
+  
+  hsdat_emp <- EPIdat(epidat, 40, 240)
+  
+  system.time(for (j in 1:iter) {
+    print(j)
+    dat_j <- epidat[sample(nrow(epidat), 5000), ]
+    
+    for (tstart in tstarts) {
+      try({
+        
+        # data for window i
+        hsdat_i <- EPIdat(dat_j, tstart, tstart + width)
+        
+        # fit, window i, obtain MLEs
+        DSAest_i <- DSAmle(hsdat_i, method = "L-BFGS-B")
+        pvec <- as.numeric(exp(DSAest_i$point$point))
+        beta <- pvec[1]
+        delta <- pvec[2]
+        gamma <- pvec[3]
+        xrhoE <- pvec[4]
+        xrhoI <- pvec[5]
+        xrhoR <- pvec[6]
+        rhoE <- xrhoE / (1 + xrhoE + xrhoI + xrhoR)
+        rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
+        rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
+        
+        # calculate E, I, R at end of interval i (use as rhos in interval i+1)
+        int_i_pred <- SEIRepidemic(beta = beta, delta = delta, gamma = gamma, 
+                                   rhoE = rhoE, rhoI = rhoI, rhoR = rhoR, 
+                                   tmin = tstart, tmax = tstart + 2 * width, tstep = 0.05)
+        
+        rhos <- c(int_i_pred$E[int_i_pred$time == tstart + width], 
+                  int_i_pred$I[int_i_pred$time == tstart + width],
+                  int_i_pred$R[int_i_pred$time == tstart + width])
+        
+        xrhos <- rhos / (1 - sum(rhos))
+        
+        # data for window i+1
+        hsdat_iplus1 <- EPIdat(dat_j, tstart + width, tstart + 2 * width)
+        
+        # calculate loglik null hypothesis
+        nullpars_i <- c(DSAest_i$point$point[1:3], log(xrhos))
+        logliknull_i <- -nloglikDSA(nullpars_i, hsdat_iplus1, tstep = 0.05, fvec = NULL)
+        
+        # fit, obtain MLEs: full model
+        DSAest_iplus1 <- DSAmle(hsdat_iplus1, method = "L-BFGS-B", init = nullpars_i)
+        
+        # calculate loglik alt hypothesis and LRT
+        loglikalt_i <- DSAest_iplus1$ll 
+        LRstat_ij <- 2 * (loglikalt_i - logliknull_i)
+        
+        # predict S from end of fitted interval (tstart + 2 * width) to tstart + 4 * width 
+        # fitting model from tstart to tstart + 2 * width
+        hsdat_full_i <- EPIdat(dat_j, tstart, tstart + 2 * width) 
+        DSAest_full_i <- DSAmle(hsdat_full_i, method = "L-BFGS-B")
+        
+        times_pred_i <- seq(tstart, tstart + 4 * width, by = 0.1)
+        DSApred_mle_i <- DSApredict(DSAest_i$point$point, times_pred_i)
+        
+        # predicted change in H
+        S_pred1 <- DSApred_mle_i$S[DSApred_mle_i$time == tstart + 3 * width] # width/2
+        S_pred2 <- DSApred_mle_i$S[DSApred_mle_i$time == tstart + 4 * width] # 2
+        Hpred0 <- -log(int_i_pred$S[int_i_pred$time == tstart + 2 * width])
+        Hpred1 <- -log(S_pred1)
+        Hpred2 <- -log(S_pred2)
+        change_pred1 <- Hpred1 - Hpred0
+        change_pred2 <- Hpred2 - Hpred0
+        
+        # empirical change in H
+        Hemp0 <- -log(1 - ecdf(hsdat_emp$Etime)(tstart + 2 * width))
+        Hemp1 <- -log(1 - ecdf(hsdat_emp$Etime)(tstart + 3 * width))
+        Hemp2 <- -log(1 - ecdf(hsdat_emp$Etime)(tstart + 4 * width))
+        change_emp1 <- Hemp1 - Hemp0
+        change_emp2 <- Hemp2 - Hemp0
+      })
+      
+      ratio1_ij <- change_pred1 / change_emp1
+      ratio2_ij <- change_pred2 / change_emp2
+      
+      if (length(LRstat_ij) == 0) {
+        LRstat_ij <- 0
+      }
+      
+      LRdat <- rbind(LRdat, data.frame(
+        iter = j,
+        tstart = tstart,
+        H0 = Hpred0,
+        H1 = Hpred1,
+        H2 = Hpred2,
+        ratio1 = ratio1_ij,
+        ratio2 = ratio2_ij,
+        LRstat = LRstat_ij
+      ))
+    }
+  })
+}
+
+
+
 
 # parallelize computation using parLapply
 # n.cores <- detectCores() 
