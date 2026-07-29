@@ -145,6 +145,36 @@ cori_est <- function(cori_gt, cori_incidence, c_cutoff) {
   
 }
 
+
+# Cori estimate using parametric SI
+
+# first, calculate the SI 
+cori_gt$SI <- cori_gt$etime_infectee - cori_gt$etime_infector
+
+coriC <- function(begin, end, step, cori_gt, cori_incidence) {
+  tstarts <- seq(begin, end, by = step)
+  tryCatch({
+    cori_est <- data.frame("time" = rep(NA, length(tstarts)),
+                         "estimate" = rep(NA, length(tstarts)),
+                         "upperRt" = rep(NA, length(tstarts)),
+                         "lowerRt" = rep(NA, length(tstarts)))
+    for (i in 3:length(tstarts)) {
+      tstart <- tstarts[i]
+      mean_si <- mean(cori_gt$SI[cori_gt$etime_infectee < i])
+      std_si <- sqrt(var(cori_gt$SI[cori_gt$etime_infectee < i]))
+    
+      coriC <- estimate_R(cori_incidence$incidence, method = "parametric_si",
+                          config = make_config(list(
+                          mean_si = mean_si, std_si = std_si)))
+      cori_est$time[i] <- coriC$R$t_start[i]
+      cori_est$estimate[i] <- coriC$R$`Median(R)`[i]
+      cori_est$upperRt[i] <- coriC$R$`Quantile.0.025(R)`[i]
+      cori_est$lowerRt[i] <- coriC$R$`Quantile.0.975(R)`[i]
+    }
+  })
+    return(cori_est)
+}
+
 # # Plotting function
 # eon_plots <- function(DSA, Cori, truth, R0, width, pop, ymax) {
 #  dsa_dat <- DSA
@@ -202,13 +232,14 @@ cori_est <- function(cori_gt, cori_incidence, c_cutoff) {
 # eon_plots(DSA = res2, Cori = NULL, truth = true_sim2, width = 6, R0 = 2,
 #           pop = n_sens, ymax = 3)
 
-# Smoothed estimate using many windows
-adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
+# Smoothed estimate using many windows 
+adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
+  windows_vec <- sort(windows_vec)
   
   # estimate Rt at different window sizes
   window_list <- lapply(windows_vec, function(x) {
     eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
-            step = 1, obs_end = TRUE, use_empEIRsurv = TRUE) %>%
+            step = 1, obs_end = TRUE, use_empEIRsurv = TRUE) |>
     dplyr::select(time, estimate, beta, gamma, R0, rt_var) %>%
     dplyr::rename(!!paste0("rt", x) := estimate,
                   !!paste0("beta", x) := beta,
@@ -219,7 +250,7 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   
   # housekeeping
   rt_all <- Reduce(function(x, y) 
-    inner_join(x, y, by = "time", na_matches = "never"), window_list)
+    left_join(x, y, by = "time", na_matches = "never"), window_list)
   stable <- apply(rt_all[ , grepl("rt|var", names(rt_all))], 1,
                   function(row) all(is.finite(row)))
   idx <- which(stable)
@@ -237,37 +268,38 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8)) {
   rt_comb <- rowSums(rt_mat/var_mat) / precision
   var_comb <- 1/precision
   
-  # CIs
-  ntimes <- nrow(rt_trim)
-  lower <- numeric(ntimes)
-  upper <- numeric(ntimes)
-  
-  for(i in 1:ntimes){
-    
-    mu <- as.numeric(rt_trim[i, rt_cols])
-    lmu <- log(mu)
-    vars <- as.numeric(rt_trim[i, var_cols])
-    lvars <- vars / mu^2
-    Sigma <- diag(vars)
-    lSigma <- diag(lvars)
-    #browser()
-    lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
-    
-    weights <- 1/vars
-    weights <- weights/sum(weights)
-    lrt_sim <- apply(lsamples, 1, function(x) sample(x, size = 1, prob = weights))
-    
-    lower[i] <- exp(quantile(lrt_sim, 0.025))
-    upper[i] <- exp(quantile(lrt_sim, 0.975))
-  }
-  
   res_df <- 
     data.frame(
-    time = rt_trim$time,
-    estimate = rt_comb,
-    lower = lower,
-    upper = upper
-  )
+      time = rt_trim$time,
+      estimate = rt_comb)
+  
+  # CIs
+  if (CIs == TRUE) {
+    ntimes <- nrow(rt_trim)
+    lower <- numeric(ntimes)
+    upper <- numeric(ntimes)
+    
+    for(i in 1:ntimes){
+      
+      mu <- as.numeric(rt_trim[i, rt_cols])
+      lmu <- log(mu)
+      vars <- as.numeric(rt_trim[i, var_cols])
+      lvars <- vars / mu^2
+      Sigma <- diag(vars)
+      lSigma <- diag(lvars)
+      #browser()
+      lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
+      
+      weights <- 1/vars
+      weights <- weights/sum(weights)
+      lrt_sim <- apply(lsamples, 1, function(x) sample(x, size = 1, prob = weights))
+      
+      lower[i] <- exp(quantile(lrt_sim, 0.025))
+      upper[i] <- exp(quantile(lrt_sim, 0.975))
+    }
+    res_df$lower <- lower
+    res_df$upper <- upper
+  }
   return(list(rt_trim, rt_all, res_df))
 }
 
@@ -277,7 +309,7 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
   
   dsa_dat <- DSAsmooth
   cori_dat <- Cori
-  cori_dat <- Cori$R
+  #cori_dat <- Cori$R
   true_dat <- truth
   
   annot <- data.frame(
@@ -297,13 +329,16 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
     geom_ribbon(data = dsa_dat, aes(x = time, ymin = lower, ymax = upper),
                 fill = "#FFDBB5", alpha = 0.4) +
     # Cori CI
-    geom_ribbon(aes(x = (t_start + t_end) / 2, ymin = `Quantile.0.025(R)`, 
-                ymax = `Quantile.0.975(R)`), fill = "gray", alpha = 0.3) +
+    geom_ribbon(aes(x = time, ymin = lowerRt, 
+                    ymax = upperRt), fill = "gray", alpha = 0.3) +
+    # geom_ribbon(aes(x = (t_start + t_end) / 2, ymin = `Quantile.0.025(R)`, 
+    #             ymax = `Quantile.0.975(R)`), fill = "gray", alpha = 0.3) +
     
     # Cori estimate
     #geom_smooth(data = cori_dat, aes(x = t_start, y = `Median(R)`, color = "Cori estimate"),
     #             se = FALSE) +
-    geom_line(aes(x = (t_start + t_end) / 2, y = `Median(R)`, color = "Cori estimate")) +
+    #geom_line(aes(x = (t_start + t_end) / 2, y = `Median(R)`, color = "Cori estimate")) +
+    geom_line(aes(x = time, y = estimate, color = "Cori estimate")) +
     geom_vline(xintercept = c_cutoff, linetype = "dotted") +
     
     # true Rt
@@ -321,11 +356,54 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
       )
     ) +
     geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
-    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 200))
+    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150))
 }
 
 
-
-
-
+# Cori variations plot
+cori_plots <- function(coriA, coriB, coriC, true_dat, R0, pop, ymax) {
+  
+  pairs_res <- coriB$R
+  annot <- data.frame(
+    x = end - 40,
+    y = ymax - c(0.15, 0.2) * (ymax - 0),
+    label = c(
+      paste0("R0 = ", R0),
+      paste0("sample = ", pop, " human sensors")
+    )
+  )
+  
+  coriA %>%
+    ggplot() +
+    theme_minimal() +
+  
+    # CoriA (oracle estimator)
+    geom_ribbon(aes(x = time, ymin = Cori.025, 
+                    ymax = Cori.975), fill = "gray", alpha = 0.3) +
+    geom_line(aes(x = time, y = Cori.mean, color = "Oracle estimate")) +
+    
+    # true Rt
+    geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", linetype = "dashed") +
+    
+    # CoriB (all pairs)
+    geom_ribbon(data = pairs_res, aes(x = t_start, ymin = `Quantile.0.025(R)`, 
+                                ymax = `Quantile.0.975(R)`), fill = "#FFDBB5", alpha = 0.4) +
+    geom_line(data = pairs_res, aes(x = t_start, y = `Median(R)`, color = "Cori pairs data")) +
+    
+    # CoriC (most fair)
+    geom_ribbon(data = coriC, aes(x = time, ymin = lowerRt, ymax = upperRt),
+                fill = "palegreen", alpha = 0.3) +
+    geom_line(data = coriC, aes(x = time, y = estimate, color = "Parametric Cori")) +
+    
+    labs(x = "Time (days)", y = expression(R[t]), color = NULL) +
+    scale_color_manual(
+      values = c(
+        "Cori pairs data" = "#DA8210",
+        "Oracle estimate" = "#00008B",
+        "Parametric Cori" = "#06402B" 
+      )
+    ) +
+    geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
+    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150))
+}
 
