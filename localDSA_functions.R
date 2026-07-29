@@ -361,6 +361,12 @@ rho_to_simplex <- function(rhoE, rhoI, rhoR) {
   data.frame(xrhoE = xrhoE, xrhoI = xrhoI, xrhoR = xrhoR)
 } 
 
+# cumhaz to rhos transformation
+cumhaz_to_rhos <- function(cumhazE, cumhazI, cumhazR){
+  rhoE <- exp(-cumhazI) - exp(-cumhazE)
+  rhoI <- exp(-cumhazR) - exp(-cumhazI) 
+  rhoR <- 1 - exp(-cumhazR)
+}
 
 ## maximum likelihood estimation of SEIR parameters ----------------------------
 # DSA log likelihood, called from DSAmle()
@@ -370,11 +376,10 @@ nloglikDSA <- function(pvec, data, tstep, fvec) {
   lnbeta <- pvec[1]
   lndelta <- pvec[2]
   lngamma <- pvec[3]
-  if(is.null(fvec)) {
-    xrhoE <- exp(pvec[4])
-    xrhoI <- exp(pvec[5])
-    xrhoR <- exp(pvec[6])
-  } else {
+  xrhoE <- exp(pvec[4])
+  xrhoI <- exp(pvec[5])
+  xrhoR <- exp(pvec[6])
+  if(!is.null(fvec)) {
     xrhoE <- as.numeric(exp(fvec[1]))
     xrhoI <- as.numeric(exp(fvec[2]))
     xrhoR <- as.numeric(exp(fvec[3]))
@@ -460,15 +465,13 @@ EIRsurv_to_rho <- function(EIRsurv) {
 
 
 # DSA maximum likelihood estimates
-DSAmle <- function(data, init, tstep, empEIRsurv = NULL, level = 0.95, ...) {
-  
+DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIRsurv = NULL, 
+                   level = 0.95, ...) {
+  names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", 
+                   "lnxrhoR")
+  R0coefs <- c(1, 0, -1, 0, 0, 0)
+ 
   if (is.null(empEIRsurv) || missing(empEIRsurv)) {
-    if (missing(init)) {
-      init <- c(0, 0, 0, 0, 0, 0)
-    }
-    names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", 
-                     "lnxrhoR")
-    R0coefs <- c(1, 0, -1, 0, 0, 0)
     empEIR <- NULL
     fvec <- NULL
   } else {
