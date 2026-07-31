@@ -15,7 +15,7 @@ source("util2.R")
 source("simulation.R")
 
 # Function to estimate Rt with network data
-eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALSE) {
+eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRcumhaz = FALSE) {
 
   full_dat <- EPIdat(dat, begin, end)
 
@@ -33,22 +33,22 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
 
   names(dat) <- c("X", "id", "Etime", "Itime", "Rtime", "Estat", "Istat", "Rstat")
   
-  if (use_empEIRsurv == TRUE) {
+  if (use_empEIRcumhaz == TRUE) {
     empsurv <- HSsurv(dat)
-    EIRsurv <- data.frame(Esurv = summary(empsurv$Esurv, times = tstarts,
-                                          data.frame = TRUE)$surv,
+    EIRcumhaz <- data.frame(#Esurv = summary(empsurv$Esurv, times = tstarts,
+                            #                data.frame = TRUE)$surv,
                           Ecumhaz = summary(empsurv$Esurv, times = tstarts,
                                             data.frame = TRUE)$cumhaz,
                           Ecumhaz_se = summary(empsurv$Esurv, times = tstarts,
                                                data.frame = TRUE)$std.err,
-                          Isurv = summary(empsurv$Isurv, times = tstarts,
-                                          data.frame = TRUE)$surv,
+                          #Isurv = summary(empsurv$Isurv, times = tstarts,
+                          #                data.frame = TRUE)$surv,
                           Icumhaz = summary(empsurv$Isurv, times = tstarts,
                                             data.frame = TRUE)$cumhaz,
                           Icumhaz_se = summary(empsurv$Isurv, times = tstarts,
                                                data.frame = TRUE)$std.err,
-                          Rsurv = summary(empsurv$Rsurv, times = tstarts,
-                                          data.frame = TRUE)$surv,
+                          #Rsurv = summary(empsurv$Rsurv, times = tstarts,
+                          #                data.frame = TRUE)$surv,
                           Rcumhaz = summary(empsurv$Rsurv, times = tstarts,
                                             data.frame = TRUE)$cumhaz,
                           Rcumhaz_se = summary(empsurv$Rsurv, times = tstarts,
@@ -59,9 +59,9 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
       tstart <- tstarts[i]
       print(tstart + width)
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
-      if (use_empEIRsurv == FALSE) {
+      if (use_empEIRcumhaz == FALSE) {
         # add init
-        DSAest <- DSAmle(dat, empEIRsurv = NULL, method = "L-BFGS-B")
+        DSAest <- DSAmle(dat, empEIRcumhaz = NULL, method = "L-BFGS-B")
         pvec <- as.numeric(exp(DSAest$point$point))
         beta <- pvec[1]
         lbeta <- as.numeric(DSAest$point$point)[1]
@@ -75,24 +75,24 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
         rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
         rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
       } else {
-        empEIRsurv <- EIRsurv[i, ]
-        DSAest <- DSAmle(dat, empEIRsurv = empEIRsurv, method = "L-BFGS-B")
+        empEIRcumhaz <- EIRcumhaz[i, ]
+        DSAest <- DSAmle(dat, empEIRcumhaz = empEIRcumhaz, method = "L-BFGS-B")
         pvec <- as.numeric(exp(DSAest$point$point))
         beta <- pvec[1]
         lbeta <- as.numeric(DSAest$point$point)[1]
         delta <- pvec[2]
         gamma <- pvec[3]
         lgamma <- as.numeric(DSAest$point$point)[3]
-        #inits <- c(log(beta), log(delta), log(gamma), log(rhoE), log(rhoI), log(rhoR))
-        rhoE <- as.numeric(DSAest$empEIR$rhoE)
-        rhoI <- as.numeric(DSAest$empEIR$rhoI)
-        rhoR <- as.numeric(DSAest$empEIR$rhoR)
+        rhoE <- pvec[4]
+        rhoI <- pvec[5]
+        rhoR <- pvec[6]
       }
       
       if (obs_end == TRUE) {
         S_est <- last(SEIRepidemic(beta = beta, delta = delta, gamma = gamma,
-                                   rhoE = rhoE, rhoI = rhoI, rhoR = rhoR, tmin = tstart,
-                                   tmax = tstart + width, tstep = 0.01)[, "S"])
+                                   rhoE = rhoE, rhoI = rhoI, rhoR = rhoR, 
+                                   tmin = tstart, tmax = tstart + width, 
+                                   tstep = 0.01)[, "S"])
       } else {
         epi <- SEIRepidemic(beta = beta, delta = delta, gamma = gamma,
                               rhoE = rhoE, rhoI = rhoI, rhoR = rhoR, 
@@ -107,7 +107,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRsurv = FALS
       Rt_out[i, "estimate"] <- exp(lbeta - lgamma + log(S_est))
       Rt_out[i, "R0"] <- exp(lbeta - lgamma)
 
-      mlesamp <- DSApred_mlesamp(DSAest, empEIRsurv = empEIRsurv)
+      mlesamp <- DSApred_mlesamp(DSAest, empEIRcumhaz = empEIRcumhaz)
       cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
       
       Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
@@ -239,7 +239,7 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
   # estimate Rt at different window sizes
   window_list <- lapply(windows_vec, function(x) {
     eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
-            step = 1, obs_end = TRUE, use_empEIRsurv = TRUE) |>
+            step = 1, obs_end = TRUE, use_empEIRcumhaz = TRUE) |>
     dplyr::select(time, estimate, beta, gamma, R0, rt_var) %>%
     dplyr::rename(!!paste0("rt", x) := estimate,
                   !!paste0("beta", x) := beta,
