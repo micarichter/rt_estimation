@@ -366,11 +366,22 @@ cumhaz_to_rhos <- function(cumhazE, cumhazI, cumhazR){
   rhoE <- exp(-cumhazI) - exp(-cumhazE)
   rhoI <- exp(-cumhazR) - exp(-cumhazI) 
   rhoR <- 1 - exp(-cumhazR)
+  
+  data.frame(rhoE = rhoE, rhoI = rhoI, rhoR = rhoR)
+}
+
+# rhos to cumhaz transformation
+rhos_to_cumhaz <- function(rhoE, rhoI, rhoR){
+  cumhazE <- -log(1 - rhoR - rhoI - rhoE) 
+  cumhazI <- -log(1 - rhoR - rhoI)
+  cumhazR <- -log(1 - rhoR)
+  
+  data.frame(cumhazE = cumhazE, cumhazI = cumhazI, cumhazR = cumhazR)
 }
 
 ## maximum likelihood estimation of SEIR parameters ----------------------------
 # DSA log likelihood, called from DSAmle()
-nloglikDSA <- function(pvec, data, tstep, fvec) {
+nloglikDSA <- function(pvec, data, tstep, empEIRcumhaz = NULL) {
   # SEIR parameters
   pvec <- as.numeric(pvec)
   lnbeta <- pvec[1]
@@ -379,11 +390,6 @@ nloglikDSA <- function(pvec, data, tstep, fvec) {
   xrhoE <- exp(pvec[4])
   xrhoI <- exp(pvec[5])
   xrhoR <- exp(pvec[6])
-  if(!is.null(fvec)) {
-    xrhoE <- as.numeric(exp(fvec[1]))
-    xrhoI <- as.numeric(exp(fvec[2]))
-    xrhoR <- as.numeric(exp(fvec[3]))
-  }
   
   # human sensors start and stop times
   tstart <- attr(data, "tstart")
@@ -439,9 +445,21 @@ nloglikDSA <- function(pvec, data, tstep, fvec) {
     if (nR > 0) {
       loglikR <- loglikR + lnrhoR * nR
     } 
+    
+    # from empirical cumulative hazards
+    loglikEIR_prior <- 0 
+    if (!is.null(empEIRcumhaz)) {
+      # convert rhos to cumulative hazards
+      EIRcumhaz <- rhos_to_cumhaz(rhoE, rhoI, rhoR)
+      # calculate log normal densities of CHs
+      EIRcumhaz_lndens <- dnorm(EIRcumhaz, empEIRcumhaz$mean, empEIRcumhaz$se, 
+                                log = TRUE)
+      # add to get likelihood contribution
+      loglikEIR_prior <- sum(EIRcumhaz_lndens)
+    }
    
     # return negative log likelihood
-    -(loglikS + loglikE + loglikI + loglikR)
+    -(loglikS + loglikE + loglikI + loglikR + loglikEIR_prior)
   })
 }
 
@@ -465,31 +483,13 @@ EIRsurv_to_rho <- function(EIRsurv) {
 
 
 # DSA maximum likelihood estimates
-DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIRsurv = NULL, 
+DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIRcumhaz = NULL, 
                    level = 0.95, ...) {
   names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", 
                    "lnxrhoR")
   R0coefs <- c(1, 0, -1, 0, 0, 0)
- 
-  if (is.null(empEIRsurv) || missing(empEIRsurv)) {
-    empEIR <- NULL
-    fvec <- NULL
-  } else {
-    if (missing(init)) {
-      init <- c(0, 0, 0)
-      R0coefs <- c(1, 0, -1)
-    }
-    names(init) <- c("lnbeta", "lndelta", "lngamma")
-    empEIR <- EIRsurv_to_rho(empEIRsurv)
-    rhoE <- empEIR$rhoE
-    rhoI <- empEIR$rhoI
-    rhoR <- empEIR$rhoR
-    xrhos <- rho_to_simplex(rhoE = rhoE, rhoI = rhoI, rhoR = rhoR)
-    fvec <- log(xrhos)
-  }
   mle <- optim(
-    init, fn = nloglikDSA, data = data, tstep = tstep, fvec = fvec, 
-    hessian = TRUE,...)
+    init, fn = nloglikDSA, data = data, tstep = tstep, hessian = TRUE,...)
   
   # point estimate, covariance matrix, and log likelihood value
   point <- data.frame(point = mle$par)
@@ -517,7 +517,7 @@ DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIRsurv = NULL,
   # return list of results
   list(
     point = point, interval = interval, lnR0 = lnR0, stderr = stderr, cov = cov, 
-    loglik = loglik, empEIRsurv = empEIRsurv, empEIR = empEIR)
+    loglik = loglik, empEIRcumhaz = empEIRcumhaz)
 }
 
 DSAsummary <- function(DSAest, invln = FALSE) {
@@ -532,31 +532,21 @@ DSAsummary <- function(DSAest, invln = FALSE) {
 
 ## maximum likelihood model fit and predictions -------------------------------
 ## model fit and predictions --------------------------------------------------
-DSApredict <- function(point, times, samples, level = 0.95, empEIRsurv = NULL) {
+DSApredict <- function(point, times, samples, level = 0.95, empEIRcumhaz = NULL) {
   # point estimates are lnbeta, lndelta, lngamma
   # times is a vector of times at which the SEIR curves should be plotted
   # samples is a set of multivariate normal or MC posterior samples
   # samples and level are ignored unless ci = TRUE
-  if (is.null(empEIRsurv)) {
-    xrhos <- exp(point[4:6])
-    rho_total <- 1 + sum(xrhos)
-    rhoE <- xrhos[1] / rho_total
-    rhoI <- xrhos[2] / rho_total
-    rhoR <- xrhos[3] / rho_total
+  xrhos <- exp(point[4:6])
+  rho_total <- 1 + sum(xrhos)
+  rhoE <- xrhos[1] / rho_total
+  rhoI <- xrhos[2] / rho_total
+  rhoR <- xrhos[3] / rho_total
     
-    params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
+  params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
     
-    state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-    KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
-  } else {
-    rhoE <- rhoE_fixed(tstart)
-    rhoI <- rhoI_fixed(tstart)
-    rhoR <- rhoR_fixed(tstart)
-  # run ODE at point estimate
-    params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
-    state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-    KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
-  }
+  state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
+  KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
   
   # calculate confidence limits if needed and return epidemic
   epidemic <- as.data.frame(KMsolve)
@@ -576,9 +566,9 @@ DSApredict <- function(point, times, samples, level = 0.95, empEIRsurv = NULL) {
   epidemic
 }
 
-DSApred_mlesamp <- function(mle, nsamp = 1000, empEIRsurv = NULL) {
+DSApred_mlesamp <- function(mle, nsamp = 1000, empEIRcumhaz = NULL) {
   
-  if (is.null(empEIRsurv)) {
+  if (is.null(empEIRcumhaz)) {
     # sample from MLE multivariate normal approximation
     mu <- mle$point$point
     Sigma <- mle$cov
@@ -588,15 +578,15 @@ DSApred_mlesamp <- function(mle, nsamp = 1000, empEIRsurv = NULL) {
     Sigma <- mle$cov
     pars1 <- mvrnorm(nsamp, mu, Sigma, empirical = TRUE)
     # sample log cumhaz
-    lEcumhaz <- log(empEIRsurv$Ecumhaz)
-    lIcumhaz <- log(empEIRsurv$Icumhaz)
-    lRcumhaz <- log(empEIRsurv$Rcumhaz)
+    lEcumhaz <- log(empEIRcumhaz$Ecumhaz)
+    lIcumhaz <- log(empEIRcumhaz$Icumhaz)
+    lRcumhaz <- log(empEIRcumhaz$Rcumhaz)
     lcumhaz <- c(lEcumhaz, lIcumhaz, lRcumhaz)
-    
+
     # delta method for SEs of the log
-    lEcumhaz_se <- empEIRsurv$Ecumhaz_se / empEIRsurv$Ecumhaz
-    lIcumhaz_se <- empEIRsurv$Icumhaz_se / empEIRsurv$Icumhaz
-    lRcumhaz_se <- empEIRsurv$Rcumhaz_se / empEIRsurv$Rcumhaz
+    lEcumhaz_se <- empEIRcumhaz$Ecumhaz_se / empEIRcumhaz$Ecumhaz
+    lIcumhaz_se <- empEIRcumhaz$Icumhaz_se / empEIRcumhaz$Icumhaz
+    lRcumhaz_se <- empEIRcumhaz$Rcumhaz_se / empEIRcumhaz$Rcumhaz
     # xrhos_se <- rho_to_simplex(rhoE_se, rhoI_se, rhoR_se)
     # lxrhos_se <- lapply(xrhos_se, log)
     #Sigma2 <- diag(c(lxrhos_se[1], lxrhos_se[2], lxrhos_se[3]), 3, 3)
