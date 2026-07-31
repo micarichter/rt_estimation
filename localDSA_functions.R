@@ -379,6 +379,17 @@ rhos_to_cumhaz <- function(rhoE, rhoI, rhoR){
   data.frame(cumhazE = cumhazE, cumhazI = cumhazI, cumhazR = cumhazR)
 }
 
+# rhos to surv transformation
+rhos_to_surv <- function(rhoE, rhoI, rhoR){
+  survE <- 1 - rhoR - rhoI - rhoE
+  survI <- 1 - rhoR - rhoI
+  survR <- 1 - rhoR
+  
+  data.frame(survE = survE, survI = survI, survR = survR)
+}
+
+
+
 ## maximum likelihood estimation of SEIR parameters ----------------------------
 # DSA log likelihood, called from DSAmle()
 nloglikDSA <- function(pvec, data, tstep, empEIRcumhaz = NULL) {
@@ -449,13 +460,13 @@ nloglikDSA <- function(pvec, data, tstep, empEIRcumhaz = NULL) {
     # from empirical cumulative hazards
     loglikEIR_prior <- 0 
     if (!is.null(empEIRcumhaz)) {
-      # convert rhos to cumulative hazards
-      EIRcumhaz <- rhos_to_cumhaz(rhoE, rhoI, rhoR)
-      # calculate log normal densities of CHs
-      EIRcumhaz_lndens <- dnorm(EIRcumhaz, empEIRcumhaz$mean, empEIRcumhaz$se, 
-                                log = TRUE)
+      # convert rhos to survival probabilities
+      EIRsurv <- rhos_to_surv(rhoE, rhoI, rhoR)
+      # calculate log normal densities of survs
+      EIRsurv_lndens <- dnorm(EIRsurv, empEIRcumhaz$mean, empEIRcumhaz$se, 
+                              log = TRUE)
       # add to get likelihood contribution
-      loglikEIR_prior <- sum(EIRcumhaz_lndens)
+      loglikEIR_prior <- sum(EIRsurv_lndens)
     }
    
     # return negative log likelihood
