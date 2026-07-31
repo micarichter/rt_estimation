@@ -15,7 +15,8 @@ source("util2.R")
 source("simulation.R")
 
 # Function to estimate Rt with network data
-eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRcumhaz = FALSE) {
+eon_est <- function(dat, begin, end, width, step, obs_end, 
+                    use_empEIRcumhaz = FALSE, CIs = TRUE) {
 
   full_dat <- EPIdat(dat, begin, end)
 
@@ -27,6 +28,9 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRcumhaz = FA
                        "beta" = rep(NA, length(tstarts)),
                        "delta" = rep(NA, length(tstarts)),
                        "gamma" = rep(NA, length(tstarts)),
+                       "rhoE" = rep(NA, length(tstarts)),
+                       "rhoI" = rep(NA, length(tstarts)),
+                       "rhoR" = rep(NA, length(tstarts)),
                        "est_S" = rep(NA, length(tstarts)),
                        "R0" = rep(NA, length(tstarts)),
                        "rt_var" = rep(NA, length(tstarts)))
@@ -35,24 +39,24 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRcumhaz = FA
   
   if (use_empEIRcumhaz == TRUE) {
     empsurv <- HSsurv(dat)
-    EIRcumhaz <- data.frame(#Esurv = summary(empsurv$Esurv, times = tstarts,
-                            #                data.frame = TRUE)$surv,
-                          Ecumhaz = summary(empsurv$Esurv, times = tstarts,
-                                            data.frame = TRUE)$cumhaz,
-                          Ecumhaz_se = summary(empsurv$Esurv, times = tstarts,
+    EIRcumhaz <- data.frame(Esurv = summary(empsurv$Esurv, times = tstarts,
+                                            data.frame = TRUE)$surv,
+                            Ecumhaz = summary(empsurv$Esurv, times = tstarts,
+                                              data.frame = TRUE)$cumhaz,
+                            Esurv_se = summary(empsurv$Esurv, times = tstarts,
                                                data.frame = TRUE)$std.err,
-                          #Isurv = summary(empsurv$Isurv, times = tstarts,
-                          #                data.frame = TRUE)$surv,
-                          Icumhaz = summary(empsurv$Isurv, times = tstarts,
-                                            data.frame = TRUE)$cumhaz,
-                          Icumhaz_se = summary(empsurv$Isurv, times = tstarts,
+                            Isurv = summary(empsurv$Isurv, times = tstarts,
+                                            data.frame = TRUE)$surv,
+                            Icumhaz = summary(empsurv$Isurv, times = tstarts,
+                                              data.frame = TRUE)$cumhaz,
+                            Isurv_se = summary(empsurv$Isurv, times = tstarts,
                                                data.frame = TRUE)$std.err,
-                          #Rsurv = summary(empsurv$Rsurv, times = tstarts,
-                          #                data.frame = TRUE)$surv,
-                          Rcumhaz = summary(empsurv$Rsurv, times = tstarts,
-                                            data.frame = TRUE)$cumhaz,
-                          Rcumhaz_se = summary(empsurv$Rsurv, times = tstarts,
-                                              data.frame = TRUE)$std.err)
+                            Rsurv = summary(empsurv$Rsurv, times = tstarts,
+                                            data.frame = TRUE)$surv,
+                            Rcumhaz = summary(empsurv$Rsurv, times = tstarts,
+                                              data.frame = TRUE)$cumhaz,
+                            Rsurv_se = summary(empsurv$Rsurv, times = tstarts,
+                                               data.frame = TRUE)$std.err)
   }
   for (i in 1:length(tstarts)) {
     try({
@@ -103,15 +107,19 @@ eon_est <- function(dat, begin, end, width, step, obs_end, use_empEIRcumhaz = FA
     
       Rt_out[i, "time"] <- tstart + width
       Rt_out[i, "est_S"] <- S_est
-      Rt_out[i, c("beta", "delta", "gamma")] <- c(beta, delta, gamma)
+      Rt_out[i, c("beta", "delta", "gamma", "rhoE", "rhoI", "rhoR")] <- 
+        c(beta, delta, gamma, rhoE, rhoI, rhoR)
       Rt_out[i, "estimate"] <- exp(lbeta - lgamma + log(S_est))
       Rt_out[i, "R0"] <- exp(lbeta - lgamma)
 
-      mlesamp <- DSApred_mlesamp(DSAest, empEIRcumhaz = empEIRcumhaz)
-      cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
-      
-      Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
-        last(cis$bounds[, c("upperRt", "lowerRt", "Rt_var")])
+      if (CIs == TRUE) {
+        mlesamp <- DSApred_mlesamp(DSAest, empEIRcumhaz = empEIRcumhaz)
+        cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
+        
+        Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
+          last(cis$bounds[, c("upperRt", "lowerRt", "Rt_var")])
+      }
+  
     })
   }
     Rt_out = Rt_out
