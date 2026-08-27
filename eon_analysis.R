@@ -16,7 +16,7 @@ source("simulation.R")
 
 # Function to estimate Rt with network data
 eon_est <- function(dat, begin, end, width, step, obs_end,
-                    use_empEIR = FALSE, CIs = TRUE, maxit_sann = 1500) {
+                    use_empEIR = FALSE, CIs = TRUE, maxit_sann = 2000) {
 
   full_dat <- EPIdat(dat, begin, end)
 
@@ -76,8 +76,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end,
         sann_est <- DSAest_sann$point$point
         
         # step 2: Nelder-Mead or L-BFGS-B 
-        DSAest <- DSAmle(dat, empEIR = empEIR, method = "Nelder-Mead", 
-                         init = sann_est)
+        DSAest <- DSAmle(dat, method = "BFGS", init = sann_est)
       }
       pvec <- as.numeric(exp(DSAest$point$point))
       beta <- pvec[1]
