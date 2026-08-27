@@ -392,7 +392,7 @@ rhos_to_surv <- function(rhoE, rhoI, rhoR){
 
 ## maximum likelihood estimation of SEIR parameters ----------------------------
 # DSA log likelihood, called from DSAmle()
-nloglikDSA <- function(pvec, data, tstep, empEIRcumhaz = NULL) {
+nloglikDSA <- function(pvec, data, tstep, empEIR = NULL) {
   # SEIR parameters
   pvec <- as.numeric(pvec)
   lnbeta <- pvec[1]
@@ -459,19 +459,21 @@ nloglikDSA <- function(pvec, data, tstep, empEIRcumhaz = NULL) {
     
     # from empirical cumulative hazards
     loglikEIR_prior <- 0 
-    if (!is.null(empEIRcumhaz)) {
+    if (!is.null(empEIR)) {
       # convert rhos to survival probabilities
-      EIRsurv <- rhos_to_surv(rhoE, rhoI, rhoR)
+      EIRsurv <- as.numeric(rhos_to_surv(rhoE, rhoI, rhoR))
       # calculate log normal densities of survs
-      EIRsurv_lndens <- dnorm(EIRsurv, empEIRcumhaz$mean, empEIRcumhaz$se, 
-                              log = TRUE)
+      EIRmean <- with(empEIR, c(Esurv, Isurv, Rsurv))
+      EIRse <- with(empEIR, c(Esurv_se, Isurv_se, Rsurv_se))
+      EIRsurv_lndens <- dnorm(EIRsurv, EIRmean, EIRse, log = TRUE)
       # add to get likelihood contribution
       loglikEIR_prior <- sum(EIRsurv_lndens)
     }
-   
+    
     # return negative log likelihood
     -(loglikS + loglikE + loglikI + loglikR + loglikEIR_prior)
   })
+ 
 }
 
 # Convert EIRsurv to EIRprev
@@ -494,13 +496,24 @@ EIRsurv_to_rho <- function(EIRsurv) {
 
 
 # DSA maximum likelihood estimates
-DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIRcumhaz = NULL, 
+DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIR = NULL, 
                    level = 0.95, ...) {
   names(init) <- c("lnbeta", "lndelta", "lngamma", "lnxrhoE", "lnxrhoI", 
                    "lnxrhoR")
   R0coefs <- c(1, 0, -1, 0, 0, 0)
+  
+  if (!is.null(empEIR)) {
+    #EIRsurv <- with(empEIR, c(Esurv, Isurv, Rsurv))
+    #browser()
+    rhos <- EIRsurv_to_rho(empEIR)
+    xrhos <- rho_to_simplex(rhos$rhoE, rhos$rhoI, rhos$rhoR)
+    init[c("lnxrhoE", "lnxrhoI", "lnxrhoR")] <- 
+      log(c(xrhos$xrhoE, xrhos$xrhoI, xrhos$xrhoR))
+  }
+  
   mle <- optim(
-    init, fn = nloglikDSA, data = data, tstep = tstep, hessian = TRUE,...)
+    init, fn = nloglikDSA, data = data, tstep = tstep, empEIR = empEIR, 
+    hessian = TRUE, ...)
   
   # point estimate, covariance matrix, and log likelihood value
   point <- data.frame(point = mle$par)
@@ -528,7 +541,7 @@ DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIRcumhaz = NULL,
   # return list of results
   list(
     point = point, interval = interval, lnR0 = lnR0, stderr = stderr, cov = cov, 
-    loglik = loglik, empEIRcumhaz = empEIRcumhaz)
+    loglik = loglik, empEIR = empEIR)
 }
 
 DSAsummary <- function(DSAest, invln = FALSE) {
@@ -543,7 +556,7 @@ DSAsummary <- function(DSAest, invln = FALSE) {
 
 ## maximum likelihood model fit and predictions -------------------------------
 ## model fit and predictions --------------------------------------------------
-DSApredict <- function(point, times, samples, level = 0.95, empEIRcumhaz = NULL) {
+DSApredict <- function(point, times, samples, level = 0.95, empEIR = NULL) {
   # point estimates are lnbeta, lndelta, lngamma
   # times is a vector of times at which the SEIR curves should be plotted
   # samples is a set of multivariate normal or MC posterior samples
@@ -555,9 +568,11 @@ DSApredict <- function(point, times, samples, level = 0.95, empEIRcumhaz = NULL)
   rhoR <- xrhos[3] / rho_total
     
   params <- c(beta = exp(point[1]), delta = exp(point[2]), gamma = exp(point[3]))
-    
-  state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
-  KMsolve <- ode(y = state, times = times, func = KMode, parms = params)
+  
+  state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE), 
+             logI = log(rhoI))  
+  #state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
+  KMsolve <- ode(y = state, times = times, func = logKMode, parms = params)
   
   # calculate confidence limits if needed and return epidemic
   epidemic <- as.data.frame(KMsolve)
@@ -577,53 +592,58 @@ DSApredict <- function(point, times, samples, level = 0.95, empEIRcumhaz = NULL)
   epidemic
 }
 
-DSApred_mlesamp <- function(mle, nsamp = 1000, empEIRcumhaz = NULL) {
+DSApred_mlesamp <- function(mle, nsamp = 1000, empEIR = NULL) {
+  # sample from MLE multivariate normal approximation
+     mu <- mle$point$point
+     Sigma <- mle$cov
+     return(mvrnorm(nsamp, mu, Sigma, empirical = TRUE))
   
-  if (is.null(empEIRcumhaz)) {
-    # sample from MLE multivariate normal approximation
-    mu <- mle$point$point
-    Sigma <- mle$cov
-    return(mvrnorm(nsamp, mu, Sigma, empirical = TRUE))
-  } else {
-    mu <- mle$point$point
-    Sigma <- mle$cov
-    pars1 <- mvrnorm(nsamp, mu, Sigma, empirical = TRUE)
-    # sample log cumhaz
-    lEcumhaz <- log(empEIRcumhaz$Ecumhaz)
-    lIcumhaz <- log(empEIRcumhaz$Icumhaz)
-    lRcumhaz <- log(empEIRcumhaz$Rcumhaz)
-    lcumhaz <- c(lEcumhaz, lIcumhaz, lRcumhaz)
-
-    # delta method for SEs of the log
-    lEcumhaz_se <- empEIRcumhaz$Ecumhaz_se / empEIRcumhaz$Ecumhaz
-    lIcumhaz_se <- empEIRcumhaz$Icumhaz_se / empEIRcumhaz$Icumhaz
-    lRcumhaz_se <- empEIRcumhaz$Rcumhaz_se / empEIRcumhaz$Rcumhaz
-    # xrhos_se <- rho_to_simplex(rhoE_se, rhoI_se, rhoR_se)
-    # lxrhos_se <- lapply(xrhos_se, log)
-    #Sigma2 <- diag(c(lxrhos_se[1], lxrhos_se[2], lxrhos_se[3]), 3, 3)
-    
-    Sigma2 <- diag(c(lEcumhaz_se, lIcumhaz_se, lRcumhaz_se)^2)
-    pars2 <- exp(-exp(mvrnorm(nsamp, lcumhaz, Sigma2)))
-    pars3 <- apply(pars2, 2, function(x) x[order(x)])
-    #browser()
-    Esurv_samp <- pars3[, 1]
-    Isurv_samp <- pars3[, 2]
-    Rsurv_samp <- pars3[, 3]
-    
-    rhoE_samp <- Isurv_samp - Esurv_samp
-    rhoI_samp <- Rsurv_samp - Isurv_samp
-    rhoR_samp <- 1 - Rsurv_samp
-    
-    # convert samples to lnxrhos
-    xrhos_samples <- t(mapply(rho_to_simplex, rhoE_samp, rhoI_samp, rhoR_samp))
-    xrhos_samples <- as.data.frame(xrhos_samples)
-    lxrhos_samples <- data.frame(lxrhoE = log(as.numeric(xrhos_samples$xrhoE)),
-                                 lxrhoI = log(as.numeric(xrhos_samples$xrhoI)),
-                                 lxrhoR = log(as.numeric(xrhos_samples$xrhoR)))
-    #browser()
-    # append rhos samples to beta, delta, gamma samples
-    return(cbind(pars1, lxrhos_samples))
-  }
+  
+  # if (is.null(empEIR)) {
+  #   # sample from MLE multivariate normal approximation
+  #   mu <- mle$point$point
+  #   Sigma <- mle$cov
+  #   return(mvrnorm(nsamp, mu, Sigma, empirical = TRUE))
+  # } else {
+  #   mu <- mle$point$point
+  #   Sigma <- mle$cov
+  #   pars1 <- mvrnorm(nsamp, mu, Sigma, empirical = TRUE)
+  #   # sample log cumhaz
+  #   lEcumhaz <- log(empEIR$Ecumhaz)
+  #   lIcumhaz <- log(empEIR$Icumhaz)
+  #   lRcumhaz <- log(empEIR$Rcumhaz)
+  #   lcumhaz <- c(lEcumhaz, lIcumhaz, lRcumhaz)
+  # 
+  #   # delta method for SEs of the log
+  #   lEcumhaz_se <- empEIR$Ecumhaz_se / empEIR$Ecumhaz
+  #   lIcumhaz_se <- empEIR$Icumhaz_se / empEIR$Icumhaz
+  #   lRcumhaz_se <- empEIR$Rcumhaz_se / empEIR$Rcumhaz
+  #   # xrhos_se <- rho_to_simplex(rhoE_se, rhoI_se, rhoR_se)
+  #   # lxrhos_se <- lapply(xrhos_se, log)
+  #   #Sigma2 <- diag(c(lxrhos_se[1], lxrhos_se[2], lxrhos_se[3]), 3, 3)
+  #   
+  #   Sigma2 <- diag(c(lEcumhaz_se, lIcumhaz_se, lRcumhaz_se)^2)
+  #   pars2 <- exp(-exp(mvrnorm(nsamp, lcumhaz, Sigma2)))
+  #   pars3 <- apply(pars2, 2, function(x) x[order(x)])
+  #   #browser()
+  #   Esurv_samp <- pars3[, 1]
+  #   Isurv_samp <- pars3[, 2]
+  #   Rsurv_samp <- pars3[, 3]
+  #   
+  #   rhoE_samp <- Isurv_samp - Esurv_samp
+  #   rhoI_samp <- Rsurv_samp - Isurv_samp
+  #   rhoR_samp <- 1 - Rsurv_samp
+  #   
+  #   # convert samples to lnxrhos
+  #   xrhos_samples <- t(mapply(rho_to_simplex, rhoE_samp, rhoI_samp, rhoR_samp))
+  #   xrhos_samples <- as.data.frame(xrhos_samples)
+  #   lxrhos_samples <- data.frame(lxrhoE = log(as.numeric(xrhos_samples$xrhoE)),
+  #                                lxrhoI = log(as.numeric(xrhos_samples$xrhoI)),
+  #                                lxrhoR = log(as.numeric(xrhos_samples$xrhoR)))
+  #   #browser()
+  #   # append rhos samples to beta, delta, gamma samples
+  #   return(cbind(pars1, lxrhos_samples))
+  # }
 }
 
 DSApred_ci <- function(samples, times, level = 0.95) {
