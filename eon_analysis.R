@@ -15,8 +15,8 @@ source("util2.R")
 source("simulation.R")
 
 # Function to estimate Rt with network data
-eon_est <- function(dat, begin, end, width, step, obs_end, 
-                    use_empEIRcumhaz = FALSE, CIs = TRUE) {
+eon_est <- function(dat, begin, end, width, step, obs_end,
+                    use_empEIR = FALSE, CIs = TRUE, maxit_sann = 1500) {
 
   full_dat <- EPIdat(dat, begin, end)
 
@@ -37,7 +37,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end,
 
   names(dat) <- c("X", "id", "Etime", "Itime", "Rtime", "Estat", "Istat", "Rstat")
   
-  if (use_empEIRcumhaz == TRUE) {
+  if (use_empEIR == TRUE) {
     empsurv <- HSsurv(dat)
     EIRcumhaz <- data.frame(Esurv = summary(empsurv$Esurv, times = tstarts,
                                             data.frame = TRUE)$surv,
@@ -63,35 +63,35 @@ eon_est <- function(dat, begin, end, width, step, obs_end,
       tstart <- tstarts[i]
       print(tstart + width)
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
-      if (use_empEIRcumhaz == FALSE) {
-        # add init
-        DSAest <- DSAmle(dat, empEIRcumhaz = NULL, method = "L-BFGS-B")
-        pvec <- as.numeric(exp(DSAest$point$point))
-        beta <- pvec[1]
-        lbeta <- as.numeric(DSAest$point$point)[1]
-        delta <- pvec[2]
-        gamma <- pvec[3]
-        lgamma <- as.numeric(DSAest$point$point)[3]
-        xrhoE <- pvec[4]
-        xrhoI <- pvec[5]
-        xrhoR <- pvec[6]
-        rhoE <- xrhoE / (1 + xrhoE + xrhoI + xrhoR)
-        rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
-        rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
+      if (use_empEIR == FALSE) {
+        DSAest <- DSAmle(dat, empEIR = NULL, method = method)
       } else {
-        empEIRcumhaz <- EIRcumhaz[i, ]
-        DSAest <- DSAmle(dat, empEIRcumhaz = empEIRcumhaz, method = "L-BFGS-B")
-        pvec <- as.numeric(exp(DSAest$point$point))
-        beta <- pvec[1]
-        lbeta <- as.numeric(DSAest$point$point)[1]
-        delta <- pvec[2]
-        gamma <- pvec[3]
-        lgamma <- as.numeric(DSAest$point$point)[3]
-        rhoE <- pvec[4]
-        rhoI <- pvec[5]
-        rhoR <- pvec[6]
+        empEIR <- EIRcumhaz[i, ]
+        
+        # two step optimization
+        # step 1: SANN 
+        DSAest_sann <- DSAmle(dat, empEIR = empEIR, method = "SANN", 
+                              control = list(maxit = maxit_sann))
+        
+        sann_est <- DSAest_sann$point$point
+        
+        # step 2: Nelder-Mead or L-BFGS-B 
+        DSAest <- DSAmle(dat, empEIR = empEIR, method = "Nelder-Mead", 
+                         init = sann_est)
       }
-      
+      pvec <- as.numeric(exp(DSAest$point$point))
+      beta <- pvec[1]
+      lbeta <- as.numeric(DSAest$point$point)[1]
+      delta <- pvec[2]
+      gamma <- pvec[3]
+      lgamma <- as.numeric(DSAest$point$point)[3]
+      xrhoE <- pvec[4]
+      xrhoI <- pvec[5]
+      xrhoR <- pvec[6]
+      rhoE <- xrhoE / (1 + xrhoE + xrhoI + xrhoR)
+      rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
+      rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
+    
       if (obs_end == TRUE) {
         S_est <- last(SEIRepidemic(beta = beta, delta = delta, gamma = gamma,
                                    rhoE = rhoE, rhoI = rhoI, rhoR = rhoR, 
@@ -113,7 +113,7 @@ eon_est <- function(dat, begin, end, width, step, obs_end,
       Rt_out[i, "R0"] <- exp(lbeta - lgamma)
 
       if (CIs == TRUE) {
-        mlesamp <- DSApred_mlesamp(DSAest, empEIRcumhaz = empEIRcumhaz)
+        mlesamp <- DSApred_mlesamp(DSAest, empEIR = empEIR)
         cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
         
         Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
@@ -166,7 +166,7 @@ coriC <- function(begin, end, step, cori_gt, cori_incidence) {
                          "estimate" = rep(NA, length(tstarts)),
                          "upperRt" = rep(NA, length(tstarts)),
                          "lowerRt" = rep(NA, length(tstarts)))
-    for (i in 3:length(tstarts)) {
+    for (i in begin:length(tstarts)) {
       tstart <- tstarts[i]
       mean_si <- mean(cori_gt$SI[cori_gt$etime_infectee < i])
       std_si <- sqrt(var(cori_gt$SI[cori_gt$etime_infectee < i]))
@@ -247,8 +247,8 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
   # estimate Rt at different window sizes
   window_list <- lapply(windows_vec, function(x) {
     eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
-            step = 1, obs_end = TRUE, use_empEIRcumhaz = TRUE) |>
-    dplyr::select(time, estimate, beta, gamma, R0, rt_var) %>%
+            step = 1, obs_end = TRUE, use_empEIR = TRUE, CIs = CIs) |>
+    dplyr::select(time, estimate, beta, gamma, R0, rt_var) |>
     dplyr::rename(!!paste0("rt", x) := estimate,
                   !!paste0("beta", x) := beta,
                   !!paste0("gamma", x) := gamma,
@@ -259,27 +259,29 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
   # housekeeping
   rt_all <- Reduce(function(x, y) 
     left_join(x, y, by = "time", na_matches = "never"), window_list)
-  stable <- apply(rt_all[ , grepl("rt|var", names(rt_all))], 1,
-                  function(row) all(is.finite(row)))
-  idx <- which(stable)
-  rt_trim <- rt_all[idx, ]
+  
+  # keep rows that have at least one pair of rt and var
+  rt_cols <- grep("^rt", names(rt_all), value = TRUE)
+  var_cols <- grep("^var", names(rt_all), value = TRUE)
+
+  rt_mat <- as.matrix(rt_all[, rt_cols])
+  var_mat <- as.matrix(rt_all[, var_cols])
+  
+  stable_rows <- rowSums(is.finite(rt_mat) & is.finite(var_mat)) > 0
+  rt_trim <- rt_all[stable_rows, ]
+  
+  rt_mat <- as.matrix(rt_trim[, rt_cols])
+  var_mat <- as.matrix(rt_trim[, var_cols])
   
   # inverse variance weights
-  rt_cols <- grep("^rt", names(rt_trim), value = TRUE)
-  beta_cols <- grep("^beta", names(rt_trim), value = TRUE)
-  gamma_cols <- grep("^gamma", names(rt_trim), value = TRUE)
-  var_cols <- grep("^var", names(rt_trim), value = TRUE)
-  rt_mat <- as.matrix(rt_trim[ , rt_cols])
-  var_mat <- as.matrix(rt_trim[ , var_cols])
-  
-  precision <- rowSums(1/var_mat) # na.rm = T
-  rt_comb <- rowSums(rt_mat/var_mat) / precision
+  precision <- rowSums(1/var_mat, na.rm = TRUE) # na.rm = T
+  rt_comb <- rowSums(rt_mat/var_mat, na.rm = TRUE) / precision
   var_comb <- 1/precision
   
-  res_df <- 
-    data.frame(
-      time = rt_trim$time,
-      estimate = rt_comb)
+  res_df <- data.frame(
+    time = rt_trim$time,
+    estimate = rt_comb
+  )
   
   # CIs
   if (CIs == TRUE) {
@@ -290,17 +292,29 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
     for(i in 1:ntimes){
       
       mu <- as.numeric(rt_trim[i, rt_cols])
-      lmu <- log(mu)
       vars <- as.numeric(rt_trim[i, var_cols])
-      lvars <- vars / mu^2
-      Sigma <- diag(vars)
-      lSigma <- diag(lvars)
-      #browser()
-      lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
       
-      weights <- 1/vars
-      weights <- weights/sum(weights)
-      lrt_sim <- apply(lsamples, 1, function(x) sample(x, size = 1, prob = weights))
+      # keep only finite and not NA estimates 
+      stable <- is.finite(mu) & is.finite(vars) & mu > 0 & vars > 0
+      
+      mu_stable <- mu[stable]
+      vars_stable <- vars[stable]
+      
+      lmu <- log(mu_stable)
+      lvars <- vars_stable / mu_stable^2
+      
+      if (length(mu_stable) == 1) {
+        lsamples <- matrix(rnorm(4000, mean = lmu, sd = sqrt(lvars)), ncol = 1)
+        weights  <- 1
+        lrt_sim  <- lsamples[, 1]
+      } else {
+        lSigma   <- diag(lvars)
+        lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
+        
+        weights <- 1 / vars_stable
+        weights <- weights / sum(weights)
+        lrt_sim <- apply(lsamples, 1, function(x) sample(x, size = 1, prob = weights))
+      }
       
       lower[i] <- exp(quantile(lrt_sim, 0.025))
       upper[i] <- exp(quantile(lrt_sim, 0.975))
