@@ -393,6 +393,7 @@ rhos_to_surv <- function(rhoE, rhoI, rhoR){
 ## maximum likelihood estimation of SEIR parameters ----------------------------
 # DSA log likelihood, called from DSAmle()
 nloglikDSA <- function(pvec, data, tstep, empEIR = NULL) {
+  
   # SEIR parameters
   pvec <- as.numeric(pvec)
   lnbeta <- pvec[1]
@@ -419,11 +420,14 @@ nloglikDSA <- function(pvec, data, tstep, empEIR = NULL) {
   odesolve <- ode(y = state, times = times, func = logKMode, parms = params)
   logSfun <- approxfun(
     odesolve[, "time"], odesolve[, "logS"],
-    yleft = log(1 - rhoE - rhoI - rhoR), 
+    #yleft = log(1 - rhoE - rhoI - rhoR), 
+    yleft = odesolve[1, "logS"],
     yright = odesolve[nrow(odesolve), "logS"])
   logIfun <- approxfun(
     odesolve[, "time"], odesolve[, "logI"], 
-    yleft = log(rhoI), yright = odesolve[nrow(odesolve), "logI"])
+    #yleft = log(rhoI),
+    yleft = odesolve[1, "logI"],
+    yright = odesolve[nrow(odesolve), "logI"])
   lnrhoE <- log(rhoE)
   lnrhoI <- log(rhoI)
   lnrhoR <- log(rhoR)
@@ -503,8 +507,6 @@ DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIR = NULL,
   R0coefs <- c(1, 0, -1, 0, 0, 0)
   
   if (!is.null(empEIR)) {
-    #EIRsurv <- with(empEIR, c(Esurv, Isurv, Rsurv))
-    #browser()
     rhos <- EIRsurv_to_rho(empEIR)
     xrhos <- rho_to_simplex(rhos$rhoE, rhos$rhoI, rhos$rhoR)
     init[c("lnxrhoE", "lnxrhoI", "lnxrhoR")] <- 
@@ -654,7 +656,7 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   colnames(S) <- times
   E <- matrix(nrow = nsamp, ncol = length(times))
   colnames(E) <- times
-  I <- matrix(nrow = nsamp, ncol = length(times))
+  I <- matrix(nrow = nsamp, ncol = length(times)) 
   colnames(I) <- times
   R <- matrix(nrow = nsamp, ncol = length(times))
   colnames(R) <- times
