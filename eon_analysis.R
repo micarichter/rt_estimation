@@ -15,8 +15,8 @@ source("util2.R")
 source("simulation.R")
 
 # Function to estimate Rt with network data
-eon_est <- function(dat, begin, end, width, step, obs_end,
-                    use_empEIR = FALSE, CIs = TRUE, maxit_sann = 2000) {
+eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE, 
+                   CIs = TRUE, maxit_sann = 5000) {
 
   full_dat <- EPIdat(dat, begin, end)
 
@@ -58,26 +58,48 @@ eon_est <- function(dat, begin, end, width, step, obs_end,
                             Rsurv_se = summary(empsurv$Rsurv, times = tstarts,
                                                data.frame = TRUE)$std.err)
   }
+   init2 <- c(0, 0, 0, 0, 0, 0)
+   mle_sol <- FALSE
   for (i in 1:length(tstarts)) {
     try({
       tstart <- tstarts[i]
       print(tstart + width)
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
       if (use_empEIR == FALSE) {
-        DSAest <- DSAmle(dat, empEIR = NULL, method = method)
+        DSAest <- DSAmle(dat, empEIR = NULL, method = "SANN",
+                         control = list(maxit = maxit_sann, temp = 30, tmax = 100))
       } else {
         empEIR <- EIRcumhaz[i, ]
         
         # two step optimization
-        # step 1: SANN 
-        DSAest_sann <- DSAmle(dat, empEIR = empEIR, method = "SANN", 
-                              control = list(maxit = maxit_sann))
+        # step 1: SANN
         
-        sann_est <- DSAest_sann$point$point
+        print("step 1")
+        if(!mle_sol) {
+          # use empEIR until sann finds a solution 
+          DSAest_sann <- DSAmle(dat, empEIR = empEIR, method = "SANN",
+                                control = list(maxit = maxit_sann,
+                                               temp = 20, tmax = 20))
+        } else {
+          DSAest_sann <- DSAmle(dat, method = "SANN", init = init2,
+                                control = list(maxit = maxit_sann,
+                                               temp = 20, tmax = 20))
+        }
+          sann_est <- DSAest_sann$point$point
+          print(DSAest_sann$loglik)
         
         # step 2: Nelder-Mead or L-BFGS-B 
+        print("step 2")
         DSAest <- DSAmle(dat, method = "BFGS", init = sann_est)
+        print(DSAest$loglik)
+        
+        # check if BFGS found a solution
+        if (!is.null(DSAest$point$point) && any(is.na(DSAest$point$point))) {
+          init2 <- DSAest$point$point
+          mle_sol <- TRUE
+        }
       }
+      
       pvec <- as.numeric(exp(DSAest$point$point))
       beta <- pvec[1]
       lbeta <- as.numeric(DSAest$point$point)[1]
@@ -113,7 +135,8 @@ eon_est <- function(dat, begin, end, width, step, obs_end,
 
       if (CIs == TRUE) {
         mlesamp <- DSApred_mlesamp(DSAest, empEIR = empEIR)
-        cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
+        cis <- DSApred_ci(mlesamp, times = seq(tstart,
+                                               tstart + width, 0.1))
         
         Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
           last(cis$bounds[, c("upperRt", "lowerRt", "Rt_var")])
