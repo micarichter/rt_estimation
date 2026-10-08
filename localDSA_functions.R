@@ -413,11 +413,14 @@ nloglikDSA <- function(pvec, data, tstep, empEIR = NULL) {
   rhoE <- xrhoE / (1 + xrhoE + xrhoI + xrhoR)
   rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
   rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
+
+ # print(c(rhoE, rhoI, rhoR))
   
   state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE), 
              logI = log(rhoI))
   params <- c(beta = exp(lnbeta), delta = exp(lndelta), gamma = exp(lngamma))
   odesolve <- ode(y = state, times = times, func = logKMode, parms = params)
+  
   logSfun <- approxfun(
     odesolve[, "time"], odesolve[, "logS"],
     #yleft = log(1 - rhoE - rhoI - rhoR), 
@@ -508,6 +511,7 @@ DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIR = NULL,
   
   if (!is.null(empEIR)) {
     rhos <- EIRsurv_to_rho(empEIR)
+    rhos <- pmax(rhos, 1 / (2 * n_sens))
     xrhos <- rho_to_simplex(rhos$rhoE, rhos$rhoI, rhos$rhoR)
     init[c("lnxrhoE", "lnxrhoI", "lnxrhoR")] <- 
       log(c(xrhos$xrhoE, xrhos$xrhoI, xrhos$xrhoR))
