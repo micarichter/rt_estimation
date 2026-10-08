@@ -9,6 +9,7 @@ require(tidyr)    # version 1.3.1
 require(ggplot2)  # version 3.5.1
 require(data.table) # version 1.16.0
 require(EpiEstim) # version 2.2.4
+require(future.apply) # version 4.5.2
 
 source("localDSA_functions.R")
 source("util2.R")
@@ -58,7 +59,7 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
                             Rsurv_se = summary(empsurv$Rsurv, times = tstarts,
                                                data.frame = TRUE)$std.err)
   }
-   init2 <- c(0, 0, 0, 0, 0, 0)
+  init2 <- c(0, 0, 0, 0, 0, 0)
    mle_sol <- FALSE
   for (i in 1:length(tstarts)) {
     try({
@@ -67,7 +68,8 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
       if (use_empEIR == FALSE) {
         DSAest <- DSAmle(dat, empEIR = NULL, method = "SANN",
-                         control = list(maxit = maxit_sann, temp = 30, tmax = 100))
+                         control = list(maxit = maxit_sann, temp = 30, 
+                                        tmax = 100))
       } else {
         empEIR <- EIRcumhaz[i, ]
         
@@ -76,10 +78,10 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
         
         print("step 1")
         if(!mle_sol) {
-          # use empEIR until sann finds a solution 
+          # use empEIR until sann finds a solution
           DSAest_sann <- DSAmle(dat, empEIR = empEIR, method = "SANN",
                                 control = list(maxit = maxit_sann,
-                                               temp = 20, tmax = 20))
+                                               temp = 100, tmax = 30))
         } else {
           DSAest_sann <- DSAmle(dat, method = "SANN", init = init2,
                                 control = list(maxit = maxit_sann,
@@ -87,14 +89,14 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
         }
           sann_est <- DSAest_sann$point$point
           print(DSAest_sann$loglik)
-        
-        # step 2: Nelder-Mead or L-BFGS-B 
+
+        # step 2: Nelder-Mead or L-BFGS-B
         print("step 2")
-        DSAest <- DSAmle(dat, method = "BFGS", init = sann_est)
+        DSAest <- DSAmle(dat, method = "L-BFGS-B", init = sann_est)
         print(DSAest$loglik)
         
         # check if BFGS found a solution
-        if (!is.null(DSAest$point$point) && any(is.na(DSAest$point$point))) {
+        if (!is.null(DSAest$point$point) && any(!is.na(DSAest$point$point))) {
           init2 <- DSAest$point$point
           mle_sol <- TRUE
         }
@@ -141,7 +143,6 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
         Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
           last(cis$bounds[, c("upperRt", "lowerRt", "Rt_var")])
       }
-  
     })
   }
     Rt_out = Rt_out
@@ -149,35 +150,34 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
 
 
 # Cori estimates
-cori_est <- function(cori_gt, cori_incidence, c_cutoff) {
-  pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
-  pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
-  
-  gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
-                      "ER" = ceiling(pairs_sample$etime_infector),
-                      "SL" = floor(pairs_sample$etime_infectee),
-                      "SR" = ceiling(pairs_sample$etime_infectee))
-  gt_df[] <- lapply(gt_df, as.integer)
-  
-  mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
-  
-  config <- make_config(incid = cori_incidence$incidence,
-                        method = "si_from_data",
-                        si_parametric_distr = "G",
-                        mcmc_control = mcmc_control,
-                        n1 = 500,
-                        n2 = 50,
-                        seed = 918)
-  
-  estimate_R(incid = cori_incidence$incidence, method = "si_from_data",
-                         si_data = gt_df, 
-                         config = config)
-  
-}
+# cori_est <- function(cori_gt, cori_incidence, c_cutoff) {
+#   pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
+#   pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
+#   
+#   gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
+#                       "ER" = ceiling(pairs_sample$etime_infector),
+#                       "SL" = floor(pairs_sample$etime_infectee),
+#                       "SR" = ceiling(pairs_sample$etime_infectee))
+#   gt_df[] <- lapply(gt_df, as.integer)
+#   
+#   mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
+#   
+#   config <- make_config(incid = cori_incidence$incidence,
+#                         method = "si_from_data",
+#                         si_parametric_distr = "G",
+#                         mcmc_control = mcmc_control,
+#                         n1 = 500,
+#                         n2 = 50,
+#                         seed = 918)
+#   
+#   estimate_R(incid = cori_incidence$incidence, method = "si_from_data",
+#                          si_data = gt_df, 
+#                          config = config)
+#   
+# }
 
 
 # Cori estimate using parametric SI
-
 # first, calculate the SI 
 cori_gt$SI <- cori_gt$etime_infectee - cori_gt$etime_infector
 
@@ -266,9 +266,12 @@ coriC <- function(begin, end, step, cori_gt, cori_incidence) {
 adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
   windows_vec <- sort(windows_vec)
   
+  # progress bar
+  p <- progressor(along = windows_vec)
+  
   # estimate Rt at different window sizes
-  window_list <- lapply(windows_vec, function(x) {
-    eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
+  window_list <- future_lapply(windows_vec, function(x) {
+    res <- eon_est(dat = eon_sample, begin = begin, end = end, width = x, 
             step = 1, obs_end = TRUE, use_empEIR = TRUE, CIs = CIs) |>
     dplyr::select(time, estimate, beta, gamma, R0, rt_var) |>
     dplyr::rename(!!paste0("rt", x) := estimate,
@@ -276,7 +279,10 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
                   !!paste0("gamma", x) := gamma,
                   !!paste0("R0", x) := R0,
                   !!paste0("var", x) := rt_var)
-  })
+    
+    p(sprintf("finished window size %d", x))
+    return(res)
+  }, future.seed = TRUE, future.packages = c("dplyr", "deSolve"))
   
   # housekeeping
   rt_all <- Reduce(function(x, y) 
@@ -383,7 +389,7 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
     #             se = FALSE) +
     #geom_line(aes(x = (t_start + t_end) / 2, y = `Median(R)`, color = "Cori estimate")) +
     geom_line(aes(x = time, y = estimate, color = "Cori estimate")) +
-    geom_vline(xintercept = c_cutoff, linetype = "dotted") +
+    #geom_vline(xintercept = c_cutoff, linetype = "dotted") +
     
     # true Rt
     geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", linetype = "dashed") +
