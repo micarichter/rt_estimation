@@ -10,6 +10,7 @@ require(ggplot2)  # version 3.5.1
 require(data.table) # version 1.16.0
 require(EpiEstim) # version 2.2.4
 require(future.apply) # version 4.5.2
+require(numDeriv)
 
 source("localDSA_functions.R")
 source("util2.R")
@@ -62,7 +63,7 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
   init2 <- c(0, 0, 0, 0, 0, 0)
    mle_sol <- FALSE
   for (i in 1:length(tstarts)) {
-    try({
+    tryCatch({
       tstart <- tstarts[i]
       print(tstart + width)
       dat <- HSsubset(full_dat, tstart = tstart, tstop = tstart + width)
@@ -76,7 +77,7 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
         # two step optimization
         # step 1: SANN
         
-        print("step 1")
+        #print("step 1")
         if(!mle_sol) {
           # use empEIR until sann finds a solution
           DSAest_sann <- DSAmle(dat, empEIR = empEIR, method = "SANN",
@@ -85,15 +86,20 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
         } else {
           DSAest_sann <- DSAmle(dat, method = "SANN", init = init2,
                                 control = list(maxit = maxit_sann,
-                                               temp = 20, tmax = 20))
+                                               temp = 100, tmax = 30))
         }
           sann_est <- DSAest_sann$point$point
-          print(DSAest_sann$loglik)
+          #print(DSAest_sann$loglik)
 
         # step 2: Nelder-Mead or L-BFGS-B
-        print("step 2")
-        DSAest <- DSAmle(dat, method = "L-BFGS-B", init = sann_est)
-        print(DSAest$loglik)
+        #print("step 2")
+        lwr <- c(lnbeta = -4, lndelta = -4, lngamma = -4, 
+                 lnxrhoE = -8, lnxrhoI = -8, lnxrhoR = -8)
+        upr <- c(lnbeta = 4, lndelta = 4, lngamma = 4, 
+                          lnxrhoE = 8, lnxrhoI = 8, lnxrhoR = 8)
+        DSAest <- DSAmle(dat, method = "L-BFGS-B", init = sann_est, lower = lwr,
+                         upper = upr)
+        #print(DSAest$loglik)
         
         # check if BFGS found a solution
         if (!is.null(DSAest$point$point) && any(!is.na(DSAest$point$point))) {
@@ -127,58 +133,63 @@ eon_est <-function(dat, begin, end, width, step, obs_end, use_empEIR = FALSE,
                               tstep = 0.01)
         S_est <- epi$S[epi$time == (tstart + tstart + width) / 2]
       }
-    
-      Rt_out[i, "time"] <- tstart + width
-      Rt_out[i, "est_S"] <- S_est
-      Rt_out[i, c("beta", "delta", "gamma", "rhoE", "rhoI", "rhoR")] <- 
-        c(beta, delta, gamma, rhoE, rhoI, rhoR)
-      Rt_out[i, "estimate"] <- exp(lbeta - lgamma + log(S_est))
-      Rt_out[i, "R0"] <- exp(lbeta - lgamma)
+      
+      rt_est <- exp(lbeta - lgamma + log(S_est))
+      r0_est <- exp(lbeta - lgamma)
+      
+      bounds <- c(NA, NA, NA)
 
       if (CIs == TRUE) {
         mlesamp <- DSApred_mlesamp(DSAest, empEIR = empEIR)
-        cis <- DSApred_ci(mlesamp, times = seq(tstart,
-                                               tstart + width, 0.1))
-        
-        Rt_out[i, c("upperRt", "lowerRt", "rt_var")] <- 
-          last(cis$bounds[, c("upperRt", "lowerRt", "Rt_var")])
+        cis <- DSApred_ci(mlesamp, times = seq(tstart, tstart + width, 0.1))
       }
+      Rt_out[i, ] <- list(tstart + width, rt_est, bounds[1], bounds[2], 
+                          beta, delta, gamma, rhoE, rhoI, rhoR, 
+                          S_est, r0_est, bounds[3])
+    }, error = function(e) {
+      
     })
   }
-    Rt_out = Rt_out
+    return(Rt_out)
 }
 
 
 # Cori estimates
-# cori_est <- function(cori_gt, cori_incidence, c_cutoff) {
-#   pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
-#   pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
-#   
-#   gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
-#                       "ER" = ceiling(pairs_sample$etime_infector),
-#                       "SL" = floor(pairs_sample$etime_infectee),
-#                       "SR" = ceiling(pairs_sample$etime_infectee))
-#   gt_df[] <- lapply(gt_df, as.integer)
-#   
-#   mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
-#   
-#   config <- make_config(incid = cori_incidence$incidence,
-#                         method = "si_from_data",
-#                         si_parametric_distr = "G",
-#                         mcmc_control = mcmc_control,
-#                         n1 = 500,
-#                         n2 = 50,
-#                         seed = 918)
-#   
-#   estimate_R(incid = cori_incidence$incidence, method = "si_from_data",
-#                          si_data = gt_df, 
-#                          config = config)
-#   
-# }
+cori_B <- function(cori_gt, cori_incidence, c_cutoff) {
+  pairs_sample <- cori_gt[cori_gt$etime_infectee < c_cutoff, ]
+  pairs_sample <- pairs_sample[sample(nrow(pairs_sample), n_sens), ]
+
+  gt_df <- data.frame("EL" = floor(pairs_sample$etime_infector),
+                      "ER" = ceiling(pairs_sample$etime_infector),
+                      "SL" = floor(pairs_sample$etime_infectee),
+                      "SR" = ceiling(pairs_sample$etime_infectee))
+  gt_df[] <- lapply(gt_df, as.integer)
+
+  mcmc_control <- make_mcmc_control(burnin = 1000, thin = 10, seed = 13)
+
+  config <- make_config(incid = cori_incidence$incidence,
+                        method = "si_from_data",
+                        si_parametric_distr = "G",
+                        mcmc_control = mcmc_control,
+                        n1 = 500,
+                        n2 = 50,
+                        seed = 918)
+
+  estimate_R(incid = cori_incidence$incidence, method = "si_from_data",
+                         si_data = gt_df,
+                         config = config)
+
+}
 
 
 # Cori estimate using parametric SI
 # first, calculate the SI 
+true_sim <- read.csv("eon_simulations/true_deg100_r02.csv")
+
+# Cori estimates
+cori_gt <- read.csv("eon_simulations/cori_pairs_deg100_r02.csv")
+cori_incidence <- read.csv("eon_simulations/cori_incidence_deg100_r02 .csv")
+names(cori_incidence) <- c("time", "incidence")
 cori_gt$SI <- cori_gt$etime_infectee - cori_gt$etime_infector
 
 coriC <- function(begin, end, step, cori_gt, cori_incidence) {
@@ -285,9 +296,9 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
   }, future.seed = TRUE, future.packages = c("dplyr", "deSolve"))
   
   # housekeeping
-  rt_all <- Reduce(function(x, y) 
+  rt_all <- Reduce(function(x, y)
     left_join(x, y, by = "time", na_matches = "never"), window_list)
-  
+
   # keep rows that have at least one pair of rt and var
   rt_cols <- grep("^rt", names(rt_all), value = TRUE)
   var_cols <- grep("^var", names(rt_all), value = TRUE)
@@ -332,16 +343,14 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
       lvars <- vars_stable / mu_stable^2
       
       if (length(mu_stable) == 1) {
-        lsamples <- matrix(rnorm(4000, mean = lmu, sd = sqrt(lvars)), ncol = 1)
-        weights  <- 1
-        lrt_sim  <- lsamples[, 1]
+        lrt_sim <- rnorm(4000, mean = lmu, sd = sqrt(lvars))
       } else {
-        lSigma   <- diag(lvars)
-        lsamples <- mvrnorm(4000, mu = lmu, Sigma = lSigma)
-        
         weights <- 1 / vars_stable
         weights <- weights / sum(weights)
-        lrt_sim <- apply(lsamples, 1, function(x) sample(x, size = 1, prob = weights))
+
+        # sample mixture component indices then draw from rnorm
+        idx <- sample(seq_along(mu_stable), size = 4000, replace = TRUE, prob = weights)
+        lrt_sim <- rnorm(4000, mean = lmu[idx], sd = sqrt(lvars[idx]))
       }
       
       lower[i] <- exp(quantile(lrt_sim, 0.025))
@@ -350,26 +359,27 @@ adaptive_smooth1 <- function(windows_vec = c(2, 4, 6, 8), CIs = TRUE) {
     res_df$lower <- lower
     res_df$upper <- upper
   }
+  res_df <- subset(res_df, time >= max(windows_vec))
   return(list(rt_trim, rt_all, res_df))
 }
 
 
 # Adaptive window plot
-adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
+adaptive_smooth_plot <- function(DSAsmooth, Cori = NULL, truth, ymax) {
   
   dsa_dat <- DSAsmooth
   cori_dat <- Cori
   #cori_dat <- Cori$R
   true_dat <- truth
   
-  annot <- data.frame(
-    x = end - 40,
-    y = ymax - c(0.15, 0.2) * (ymax - 0),
-    label = c(
-      paste0("R0 = ", R0),
-      paste0("sample = ", pop, " human sensors")
-    )
-  )
+  # annot <- data.frame(
+  #   x = end - 40,
+  #   y = ymax - c(0.15, 0.2) * (ymax - 0),
+  #   label = c(
+  #     paste0("R0 = ", R0),
+  #     paste0("sample = ", pop, " human sensors")
+  #   )
+  # )
   
   cori_dat %>%
     ggplot() +
@@ -405,8 +415,49 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
         "Cori estimate" = "#006C67"
       )
     ) +
-    geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
+    # geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
     coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150))
+}
+
+
+# Adaptive smooth plot 2
+adaptive_smooth_plot1 <- function(DSAsmooth, Cori = NULL, truth, ymax) {
+  
+  dsa_dat <- DSAsmooth
+  true_dat <- truth
+  
+  plot <- dsa_dat %>%
+    ggplot() +
+    theme_minimal() +
+    
+    # DSA CI
+    geom_ribbon(data = dsa_dat, aes(x = time, ymin = lower, ymax = upper),
+                fill = "#FFDBB5", alpha = 0.4) +
+    # DSA estimate 
+    geom_line(data = dsa_dat, aes(x = time, y = estimate, color = "DSA estimate")) +
+    # true Rt
+    geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", linetype = "dashed")
+  
+  if (!is.null(Cori)) {
+    cori_dat <- Cori
+    # Cori CI
+    plot <- plot + 
+      geom_ribbon(data = cori_dat, aes(x = time, ymin = lowerRt, ymax = upperRt), 
+                  fill = "gray", alpha = 0.3) +
+      # Cori point estimate
+      geom_line(data = cori_dat, aes(x = time, y = estimate, color = "Cori estimate")) +
+      scale_color_manual(
+        values = c(
+          "DSA estimate" = "#DA8210",
+          "Cori estimate" = "#006C67"))
+  } else {
+    plot <- plot +
+      scale_color_manual(
+      values = c("DSA estimate" = "#DA8210"))
+  }
+    plot <- plot + labs(x = "Time (days)", y = expression(R[t]), color = NULL) +
+      coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150))
+    return(plot)
 }
 
 
@@ -414,14 +465,14 @@ adaptive_smooth_plot <- function(DSAsmooth, Cori, truth, R0, pop, ymax) {
 cori_plots <- function(coriA, coriB, coriC, true_dat, R0, pop, ymax) {
   
   pairs_res <- coriB$R
-  annot <- data.frame(
-    x = end - 40,
-    y = ymax - c(0.15, 0.2) * (ymax - 0),
-    label = c(
-      paste0("R0 = ", R0),
-      paste0("sample = ", pop, " human sensors")
-    )
-  )
+  # annot <- data.frame(
+  #   x = end - 40,
+  #   y = ymax - c(0.15, 0.2) * (ymax - 0),
+  #   label = c(
+  #     paste0("R0 = ", R0),
+  #     paste0("sample = ", pop, " human sensors")
+  #   )
+  #)
   
   coriA %>%
     ggplot() +
@@ -437,23 +488,71 @@ cori_plots <- function(coriA, coriB, coriC, true_dat, R0, pop, ymax) {
     
     # CoriB (all pairs)
     geom_ribbon(data = pairs_res, aes(x = t_start, ymin = `Quantile.0.025(R)`, 
-                                ymax = `Quantile.0.975(R)`), fill = "#FFDBB5", alpha = 0.4) +
+                                ymax = `Quantile.0.975(R)`), fill = "#FFDBB5", alpha = 0.5) +
     geom_line(data = pairs_res, aes(x = t_start, y = `Median(R)`, color = "Cori pairs data")) +
     
     # CoriC (most fair)
     geom_ribbon(data = coriC, aes(x = time, ymin = lowerRt, ymax = upperRt),
                 fill = "palegreen", alpha = 0.3) +
-    geom_line(data = coriC, aes(x = time, y = estimate, color = "Parametric Cori")) +
+    geom_line(data = coriC, aes(x = time, y = estimate, color = "Chronological Cori")) +
     
     labs(x = "Time (days)", y = expression(R[t]), color = NULL) +
     scale_color_manual(
       values = c(
         "Cori pairs data" = "#DA8210",
         "Oracle estimate" = "#00008B",
-        "Parametric Cori" = "#06402B" 
+        "Chronological Cori" = "#06402B" 
       )
-    ) +
-    geom_text(data = annot, aes(x = x, y = y, label = label), hjust = 0) +
-    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150))
+    ) + coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150))
 }
 
+# Cori panel plot
+cori_plots1 <- function(coriA, coriB, coriC, true_dat, ymax) {
+  
+  pairs_res <- coriB$R
+  common_layers <- list(
+    theme_minimal(),
+    coord_cartesian(ylim = c(0, ymax), xlim = c(0, 150)),
+    theme(legend.position = "none")
+  )
+  
+  # Panel 1: CoriA (Oracle estimate)
+  p1 <- ggplot() +
+    common_layers +
+    geom_ribbon(data = coriA, aes(x = time, ymin = Cori.025, ymax = Cori.975), 
+                fill = "gray", alpha = 0.3) +
+    geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", 
+              linetype = "dashed") +
+    geom_line(data = coriA, aes(x = time, y = Cori.mean), color = "#006C67") +
+    labs(x = NULL, y = expression(R[t]), color = NULL, 
+         title = "Oracle estimate (Cori A)") 
+
+  # Panel 2: CoriB (Cori pairs data)
+  p2 <- ggplot() +
+    common_layers +
+    geom_ribbon(data = pairs_res, aes(x = t_start, ymin = `Quantile.0.025(R)`, 
+                                      ymax = `Quantile.0.975(R)`), fill = "gray", 
+                alpha = 0.3) +
+    geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", 
+              linetype = "dashed") +
+    geom_line(data = pairs_res, aes(x = t_start, y = `Median(R)`), 
+                                    color = "#006C67") +
+    labs(x = NULL, y = expression(R[t]), color = NULL, 
+         title = "Cori pairs data (Cori B)") 
+
+  # Panel 3: CoriC (Parametric Cori)
+  p3 <- ggplot() +
+    common_layers +
+    geom_ribbon(data = coriC, aes(x = time, ymin = lowerRt, ymax = upperRt), 
+                fill = "gray", alpha = 0.3) +
+    geom_line(data = true_dat, aes(x = time, y = true_rt), color = "black", 
+              linetype = "dashed") +
+    geom_line(data = coriC, aes(x = time, y = estimate), color = "#006C67") +
+    labs(x = "Time (days)", y = expression(R[t]), color = NULL, 
+         title = "Parametric Cori (Cori C)") 
+  
+  # Combine panels
+  (p1 | p2 | p3) + 
+    plot_layout(axes = "collect", guides = "collect") & 
+    theme(legend.position = "bottom")
+}
