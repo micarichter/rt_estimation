@@ -414,7 +414,7 @@ nloglikDSA <- function(pvec, data, tstep, empEIR = NULL) {
   rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
   rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
 
- # print(c(rhoE, rhoI, rhoR))
+  #print(c(rhoE, rhoI, rhoR))
   
   state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE), 
              logI = log(rhoI))
@@ -511,19 +511,26 @@ DSAmle <- function(data, init = c(0, 0, 0, 0, 0, 0), tstep, empEIR = NULL,
   
   if (!is.null(empEIR)) {
     rhos <- EIRsurv_to_rho(empEIR)
-    rhos <- pmax(rhos, 1 / (2 * n_sens))
+    rhos <- pmax(rhos, 1 / (4 * n_sens))
     xrhos <- rho_to_simplex(rhos$rhoE, rhos$rhoI, rhos$rhoR)
     init[c("lnxrhoE", "lnxrhoI", "lnxrhoR")] <- 
       log(c(xrhos$xrhoE, xrhos$xrhoI, xrhos$xrhoR))
   }
   
+  grad_nloglikDSA <- function(x, ...) grad(nloglikDSA, x, ...)
+  
   mle <- optim(
     init, fn = nloglikDSA, data = data, tstep = tstep, empEIR = empEIR, 
-    hessian = TRUE, ...)
+    hessian = FALSE, gr = grad_nloglikDSA, ...) # get hessian using numDeriv instead
   
   # point estimate, covariance matrix, and log likelihood value
+  #point <- data.frame(point = mle$par)
+
+  hessian <- hessian(func = nloglikDSA, x = mle$par, data = data, tstep = tstep,
+                     empEIR = empEIR)
+  cov <- solve(hessian)
   point <- data.frame(point = mle$par)
-  cov <- solve(mle$hessian)
+  #cov <- solve(mle$hessian)
   loglik <- -mle$value
   
   # interval estimates
@@ -684,6 +691,9 @@ DSApred_ci <- function(samples, times, level = 0.95) {
     rhoI <- xrhoI / (1 + xrhoE + xrhoI + xrhoR)
     rhoR <- xrhoR / (1 + xrhoE + xrhoI + xrhoR)
     #rhoS <- 1 - rhoE - rhoI - rhoR
+    if (rhoE + rhoI + rhoR > 1) {
+      print(c(rhoE, rhoI, rhoR))
+    }
     state <- c(logS = log(1 - rhoE - rhoI - rhoR), logE = log(rhoE),
               logI = log(rhoI))
     #state <- c(S = 1 - rhoE - rhoI - rhoR, E = rhoE, I = rhoI, R = rhoR)
@@ -722,7 +732,7 @@ DSApred_ci <- function(samples, times, level = 0.95) {
   lowerRt <- apply(Rt, 2, lowerq)
   upperRt <- apply(Rt, 2, upperq)
   Rt_med <- apply(Rt, 2, median)
-  Rt_var <- apply(Rt, 2, var)
+  Rt_var <- apply(Rt, 2, var, na.rm = TRUE)
   # return confidence limits
   bounds <- data.frame(
     time = times,
